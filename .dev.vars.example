@@ -1,0 +1,2 @@
+WORKER_TOKEN=local-worker-token-0123456789abcdef
+SUBMIT_TOKENS={"local-admin-token-0123456789abcdef":"*","local-bgx-token-0123456789abcdef":"beegraphix","local-rugbee-token-0123456789abcdef":"rugbee"}
