@@ -30,6 +30,7 @@ async function drain() {
   for (;;) {
     const c = await call("POST", "/api/desktop/claim", T.worker);
     if (c.status === 204) return;
+    assert.equal(c.status, 200, `claim failed: ${JSON.stringify(c.data)}`);
     await call("POST", `/api/desktop/jobs/${c.data.id}/fail`, T.worker, { message: "drained by test" });
   }
 }
