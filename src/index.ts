@@ -18,6 +18,8 @@
 //     GET  /api/uploads/:id/file      a product photo, to show it on the New video screen
 //     GET  /api/formats               the video formats and their beats (formats.ts)
 //     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
+//     GET  /api/drafts?brand=         saved New video drafts     POST /api/drafts?brand= {title, data} -> draft
+//     GET/PUT/DELETE /api/drafts/:id  one draft, with its form data (PUT {title, data})
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
@@ -37,6 +39,7 @@
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
 import { FORMATS } from "./formats";
+import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
@@ -402,6 +405,13 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/lookup" && m === "POST") return lookupProduct(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/formats" && m === "GET") return json({ formats: FORMATS });
   if (p === "/api/draft" && m === "POST") return draftScript(req, env, c, brandFor(c, url.searchParams.get("brand")));
+
+  if (p === "/api/drafts" && m === "GET") return listDrafts(env, brandFor(c, url.searchParams.get("brand")));
+  if (p === "/api/drafts" && m === "POST") return createDraft(req, env, c, brandFor(c, url.searchParams.get("brand")));
+  const dm = p.match(/^\/api\/drafts\/([0-9a-f-]{36})$/);
+  if (dm && m === "GET") return getDraft(env, c, dm[1]);
+  if (dm && m === "PUT") return updateDraft(req, env, c, dm[1]);
+  if (dm && m === "DELETE") return deleteDraft(env, c, dm[1]);
 
   if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
   if (p === "/api/jobs" && m === "GET") return listJobs(url, env, c);

@@ -190,3 +190,28 @@ test("each format lays out its own beats, and This vs That needs a winner", asyn
   assert.equal(pg.data.payload.spec.beats.find((b) => b.id === "how").text, "Pick gear\nShare the store\nWe ship it");
   await drain();
 });
+
+test("drafts save, update, stay in their brand, and delete", async () => {
+  const form = { template: "spotlight", title: "", topic: "Winter hoodies", products: [{ name: "Hoodie" }] };
+  assert.equal((await call("POST", "/api/drafts?brand=beegraphix", T.bgx, { data: { template: "nope" } })).status, 400, "unknown format");
+  const c = await call("POST", "/api/drafts?brand=beegraphix", T.bgx, { title: "", data: form });
+  assert.equal(c.status, 201, JSON.stringify(c.data));
+  const id = c.data.draft.id;
+  assert.equal(c.data.draft.title, "Untitled video");
+  assert.equal(c.data.draft.format, "Product Spotlight");
+
+  const u = await call("PUT", `/api/drafts/${id}`, T.bgx, { title: "Winter hoodies", data: { ...form, hook: "Cold?" } });
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  const g = await call("GET", `/api/drafts/${id}`, T.bgx);
+  assert.equal(g.data.draft.title, "Winter hoodies");
+  assert.equal(g.data.draft.data.hook, "Cold?");
+  assert.ok((await call("GET", "/api/drafts?brand=beegraphix", T.bgx)).data.drafts.some((d) => d.id === id));
+
+  assert.equal((await call("GET", `/api/drafts/${id}`, T.rugbee)).status, 404, "another brand can't open it");
+  assert.equal((await call("DELETE", `/api/drafts/${id}`, T.rugbee)).status, 404, "or delete it");
+  assert.ok(!(await call("GET", "/api/drafts?brand=rugbee", T.rugbee)).data.drafts.some((d) => d.id === id));
+
+  assert.equal((await call("POST", "/api/drafts?brand=beegraphix", T.bgx, { data: { ...form, notes: "x".repeat(250_000) } })).status, 413);
+  assert.equal((await call("DELETE", `/api/drafts/${id}`, T.bgx)).status, 200);
+  assert.equal((await call("GET", `/api/drafts/${id}`, T.bgx)).status, 404);
+});

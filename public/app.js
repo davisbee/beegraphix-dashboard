@@ -35,7 +35,7 @@ async function api(method, path, data) {
   let out = null;
   try { out = await res.json(); } catch { out = null; }
   if (res.status === 401 && path !== "/api/login") { state.me = null; showLogin(); throw new Error("Please sign in"); }
-  if (!res.ok) throw new Error(out?.error || `Something went wrong (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(out?.error || `Something went wrong (${res.status})`), { status: res.status });
   return out;
 }
 
@@ -153,7 +153,22 @@ function showLogin(message) {
 // ---------- videos ----------
 
 async function pageVideos() {
-  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn" href="#/new">New Video</a></div>`)}<div id="list"><div class="card empty">Loading…</div></div>`);
+  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn" href="#/new?fresh">New Video</a></div>`)}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
+  // Drafts: videos someone saved to finish later (usually waiting on footage).
+  const showDrafts = async () => {
+    const { drafts } = await api("GET", `/api/drafts?brand=${state.brand}`);
+    const box = $("#drafts");
+    if (!box) return;
+    box.innerHTML = drafts.length ? `<div class="card"><h2>Drafts</h2><p class="muted small" style="margin:0 0 12px">Saved to finish later. Open one to add the clips and build it.</p>
+      <div class="drafts">${drafts.map((d) => `<div class="draft"><a href="#/new?draft=${d.id}"><b>${esc(d.title)}</b></a><span class="small muted">${esc(d.format)} · ${esc(d.updatedBy)} · ${esc(ago(d.updatedAt))}</span>
+        <span class="row"><a class="btn outline small" href="#/new?draft=${d.id}">Open</a><button class="linkbtn dark" type="button" data-deldraft="${d.id}" data-title="${esc(d.title)}">Delete</button></span></div>`).join("")}</div></div>` : "";
+    box.querySelectorAll("[data-deldraft]").forEach((b) => b.onclick = async () => {
+      if (!confirm(`Delete the draft “${b.dataset.title}”? This can't be undone.`)) return;
+      await api("DELETE", `/api/drafts/${b.dataset.deldraft}`).catch((e) => alert(e.message));
+      showDrafts().catch(() => {});
+    });
+  };
+  showDrafts().catch(() => {});
   await loadCatalog().catch(() => {});
   const refresh = async () => {
     const qs = state.brands.length > 1 ? `?brand=${state.brand}` : "";
@@ -169,7 +184,7 @@ async function pageVideos() {
             <div class="job-meta">${esc(t.variant)} · ${esc(j.createdBy ?? "")} · ${esc(ago(j.createdAt))}</div>${bar}
           </a>`;
         }).join("")}</div>`
-      : `<div class="card empty"><p>No videos yet.</p><a class="btn" href="#/new">Make Your First Video</a></div>`;
+      : `<div class="card empty"><p>No videos yet.</p><a class="btn" href="#/new?fresh">Make Your First Video</a></div>`;
     stopTimer();
     if (jobs.some((j) => ACTIVE.includes(j.status))) state.timer = setTimeout(() => refresh().catch(() => {}), 5000);
   };
@@ -321,13 +336,45 @@ async function sendFile(file, kind, onProgress) {
   return (await api("POST", `/api/uploads/${upload.id}/complete`, { parts })).upload;
 }
 
-async function pageNew() {
+// Anything worth keeping in the New video form (a blank one isn't saved as a draft).
+const hasWork = (v) => [v.title, v.topic, v.hook, v.cta, ...v.products.flatMap((p) => [p.name, p.link, p.photo, p.script]),
+  ...Object.values(v.beats || {}).map((b) => b.script)].some((x) => String(x ?? "").trim()) || Object.keys(v.footage || {}).length > 0;
+const draftTitle = (v) => v.title.trim() || v.topic.trim() || v.products.find((p) => p.name.trim())?.name.trim() || "Untitled video";
+
+/** Save the form to Drafts (a new draft, or over the one it came from). */
+async function saveDraft(v) {
+  const { draftId, dirty, ...data } = v;
+  const payload = { title: draftTitle(v), data };
+  let r;
+  if (draftId) r = await api("PUT", `/api/drafts/${draftId}`, payload).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+  r ??= await api("POST", `/api/drafts?brand=${state.brand}`, payload);
+  v.draftId = r.draft.id;
+  v.dirty = false;
+  return r.draft;
+}
+
+async function pageNew(params = new URLSearchParams()) {
   const key = `newVideo:${state.brand}`;
   // The formats (Top 5, Product Spotlight, ...) and their beats come from the server: src/formats.ts.
   if (!state.formats) state.formats = (await api("GET", "/api/formats")).formats;
   let v;
   try { v = { ...blankVideo(), ...JSON.parse(recall(key) || "null") }; } catch { v = blankVideo(); }
   if (!v || !Array.isArray(v.products) || v.products.length !== 5) v = blankVideo();
+  // Opening a draft, or starting a new video: whatever was in progress here goes to Drafts first, so nothing is lost.
+  let note = "";
+  const want = params.get("draft");
+  if ((want && want !== v.draftId) || params.has("fresh")) {
+    if (hasWork(v) && (v.dirty || !v.draftId)) {
+      const d = await saveDraft(v);
+      note = `The video you were working on is saved in Drafts as “${d.title}”.`;
+    }
+    if (want) {
+      const { draft } = await api("GET", `/api/drafts/${want}`);
+      v = { ...blankVideo(), ...draft.data, draftId: draft.id, dirty: false };
+    } else v = blankVideo();
+    store(key, JSON.stringify(v));
+  }
+  if (params.toString()) history.replaceState(null, "", "#/new"); // a reload keeps going instead of opening it again
   const f = state.formats.find((x) => x.id === v.template) ?? state.formats[0];
   v.template = f.id;
   // A program open with shirts still in its boxes (saved before programs kept their own): put the shirts back with the products.
@@ -340,7 +387,7 @@ async function pageNew() {
   for (const b of f.beats) v.beats[b.id] = { script: "", text: "", ...(v.beats[b.id] || {}) };
   const clips = ["hook", ...f.beats.map((b) => b.id), "cta"];
   const clipLabel = (c) => (c === "hook" ? "Hook" : c === "cta" ? "Payoff" : f.beats.find((b) => b.id === c).label);
-  const save = () => store(key, JSON.stringify(v));
+  const save = () => { v.dirty = true; store(key, JSON.stringify(v)); };
   const busy = new Set(); // uploads still going
 
   const choice = (name, value, title, sub, disabled) =>
@@ -349,6 +396,7 @@ async function pageNew() {
     `<div class="slot" data-slot="${id}"><img class="slot-thumb" alt="" hidden><div class="slot-label">${esc(label)}</div><label class="btn outline small slot-pick">Choose File<input type="file" accept="${accept}" hidden></label><span class="slot-state small muted">${esc(hint)}</span><span class="slot-drop small muted">or drag it here</span></div>`;
 
   shell("new", `${header(brandName(state.brand), "New Video", "Fill this in top to bottom. The desktop builds the video and it shows up in Videos when it's ready. Your progress saves on this computer as you go.")}
+  <div id="nvNote">${note ? `<div class="notice">${esc(note)}</div>` : ""}${v.draftId ? `<div class="notice">You're working on a saved draft. Press <b>Save as Draft</b> to keep your changes for your team.</div>` : ""}</div>
   <form id="nv" novalidate>
     <div class="card"><div class="step">1</div><h2>What's the goal?</h2>
       <div class="choices three" style="margin-top:12px">
@@ -423,7 +471,8 @@ async function pageNew() {
       <div class="field"><label for="title">Video title</label><input type="text" id="title" data-k="title" placeholder="e.g. ${esc(f.titleExample)}"></div>
       <label class="check" style="margin-bottom:18px"><input type="checkbox" data-k="draft"><span>Quick preview first<br><span class="small muted">720p and faster. Check the cut, then use Render Again for the full version.</span></span></label>
       <div id="err"></div>
-      <div class="row"><button class="btn" type="submit" id="buildBtn">Build My Video</button><button class="btn outline" type="button" id="clearBtn">Start Over</button></div>
+      <div class="row"><button class="btn" type="submit" id="buildBtn">Build My Video</button><button class="btn outline" type="button" id="saveDraftBtn">Save as Draft</button><button class="btn outline" type="button" id="clearBtn">Start Over</button></div>
+      <p class="small muted" id="saveState" style="margin:10px 0 0">No footage yet? Save it as a draft. It shows up in Videos, and anyone on your team can open it, add the clips and build it.</p>
     </div>
   </form>`);
 
@@ -465,6 +514,15 @@ async function pageNew() {
     }
     else return;
     if (el.dataset.k?.endsWith(".name")) names();
+    const pm = el.dataset.k?.match(/^products\.(\d)\.(link|name|style)$/);
+    if (pm) {
+      const p = v.products[+pm[1]];
+      if (![p.link, p.name, p.style].some((x) => String(x ?? "").trim()) && (p.photo || p.colors)) {
+        Object.assign(p, { photo: null, photoName: "", colors: undefined, color: "", auto: undefined });
+        slotUi[`photo${pm[1]}`]?.show();
+        showColors(+pm[1]);
+      }
+    }
     save();
   });
   fill();
@@ -647,9 +705,22 @@ async function pageNew() {
   };
 
   $("#clearBtn").onclick = () => {
-    if (!confirm("Clear this form and start over?")) return;
+    if (!confirm(v.draftId ? "Clear this form? The saved draft stays in Videos." : "Clear this form and start over?")) return;
     store(key, "");
     pageNew();
+  };
+
+  $("#saveDraftBtn").onclick = async () => {
+    const out = $("#saveState");
+    if (busy.size) { out.innerHTML = `<span class="bad">Wait for the uploads to finish first.</span>`; return; }
+    const btn = $("#saveDraftBtn");
+    btn.disabled = true;
+    try {
+      const d = await saveDraft(v);
+      store(key, JSON.stringify(v));
+      out.innerHTML = `Saved as “${esc(d.title)}”. It's in <a href="#/videos">Videos</a> under Drafts.`;
+    } catch (err) { out.innerHTML = `<span class="bad">${esc(err.message)}</span>`; }
+    btn.disabled = false;
   };
 
   form.onsubmit = async (e) => {
@@ -668,6 +739,7 @@ async function pageNew() {
         footage: Object.fromEntries(clips.filter((c) => v.footage[c]).map((c) => [c, v.footage[c]])),
       };
       const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, draft: v.draft, spec });
+      if (v.draftId) await api("DELETE", `/api/drafts/${v.draftId}`).catch(() => {}); // built, so it's not a draft anymore
       store(key, "");
       location.hash = `#/videos/${j.id}`;
     } catch (ex) {
@@ -792,7 +864,7 @@ function route() {
   const fail = (e) => { const m = $("main"); if (m && e.message !== "Please sign in") m.innerHTML = `<div class="card empty">${esc(e.message)}</div>`; };
   if (parts[0] === "videos" && parts[1]) return pageVideo(parts[1]).catch(fail);
   if (parts[0] === "render") return pageRender(params).catch(fail);
-  if (parts[0] === "new") return pageNew().catch(fail);
+  if (parts[0] === "new") return pageNew(params).catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
   return pageVideos().catch(fail);
