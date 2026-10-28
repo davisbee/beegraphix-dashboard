@@ -239,23 +239,98 @@ async function ssSearch(env: Env, typed: string): Promise<SsStyle[]> {
   return Array.isArray(data) ? (data as SsStyle[]) : [];
 }
 
-/** POST /api/lookup/style?brand= {style} -> {name, style, photo, from}. */
+interface Found { name: string; style: string; images: string[]; from: string; exact: boolean }
+
+async function fromSs(env: Env, typed: string): Promise<Found | null> {
+  const hit = pickStyle(await ssSearch(env, typed), typed);
+  if (!hit) return null;
+  const images: string[] = [];
+  if (hit.styleImage) {
+    const small = new URL(hit.styleImage, SS_IMAGES).toString();
+    images.push(small.replace(/_f[sm](\.\w+)$/, "_fl$1"), small);
+  }
+  const exact = squash(hit.styleName) === squash(typed) || squash(`${hit.brandName}${hit.styleName}`) === squash(typed) || hit.partNumber === typed.trim();
+  return { name: `${hit.brandName} ${hit.styleName} ${hit.title}`, style: hit.styleName, images, from: "S&S Activewear", exact };
+}
+
+// SanMar Web Services (SOAP): customer number + sanmar.com login (secrets SANMAR_CUSTOMER, SANMAR_USER,
+// SANMAR_PASSWORD). The answer lists every color and size of the style (megabytes for a tee), so it reads
+// only until the first item is complete.
+const SANMAR_API = "https://ws.sanmar.com:8080/SanMarWebService/SanMarProductInfoServicePort";
+const xmlEscape = (s: string) => s.replace(/[<>&'"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+const tag = (xml: string, name: string) => decode(xml.match(new RegExp(`<(?:\\w+:)?${name}>([^<]*)</(?:\\w+:)?${name}>`))?.[1] ?? "").trim();
+
+async function readUntil(res: Response, end: RegExp, max: number) {
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += dec.decode(value, { stream: true });
+    if (end.test(text) || text.length > max) { await reader.cancel(); break; }
+  }
+  return text;
+}
+
+async function fromSanmar(env: Env, typed: string): Promise<Found | null> {
+  // "Carhartt CT106020" -> CT106020: SanMar wants the bare style.
+  const style = (typed.toUpperCase().split(/\s+/).reverse().find((w) => /\d/.test(w)) ?? typed).replace(/[^A-Z0-9-]/g, "");
+  if (!style) return null;
+  const envelope = `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:impl="http://impl.webservice.integration.sanmar.com/"><soapenv:Header/><soapenv:Body><impl:getProductInfoByStyleColorSize><arg0><style>${xmlEscape(style)}</style></arg0><arg1><sanMarCustomerNumber>${xmlEscape(env.SANMAR_CUSTOMER!)}</sanMarCustomerNumber><sanMarUserName>${xmlEscape(env.SANMAR_USER!)}</sanMarUserName><sanMarUserPassword>${xmlEscape(env.SANMAR_PASSWORD!)}</sanMarUserPassword></arg1></impl:getProductInfoByStyleColorSize></soapenv:Body></soapenv:Envelope>`;
+  let res: Response;
+  try {
+    res = await fetch(env.SANMAR_BASE_URL ?? SANMAR_API, {
+      method: "POST",
+      headers: { "content-type": "text/xml; charset=utf-8", soapaction: "" },
+      body: envelope,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new HttpError(502, "SanMar didn't answer. Try again in a minute.");
+  }
+  if (!res.body) throw new HttpError(502, "SanMar didn't answer. Try again in a minute.");
+  const xml = await readUntil(res, /<\/(?:\w+:)?listResponse>|<\/(?:\w+:)?Envelope>/, 1024 * 1024);
+  const message = tag(xml, "message");
+  if (tag(xml, "errorOccured") === "true" || !res.ok) {
+    if (/authentication/i.test(message)) throw new HttpError(503, "The SanMar login isn't working. Ask Davis to check it.");
+    if (/invalid style|not found/i.test(message)) return null;
+    throw new HttpError(502, "SanMar didn't answer. Try again in a minute.");
+  }
+  const item = xml.match(/<(?:\w+:)?listResponse>[\s\S]*?<\/(?:\w+:)?listResponse>/)?.[0];
+  if (!item) return null;
+  const found = tag(item, "style") || style;
+  // "Port & Co Core Cotton Tee. PC54": the title ends with the style.
+  const title = tag(item, "productTitle").replace(new RegExp(`[.\\s-]*${found.replace(/[^A-Za-z0-9-]/g, "")}\\s*$`, "i"), "");
+  const images = ["productImage", "frontModel", "colorProductImage", "frontFlat"].map((n) => tag(item, n)).filter((u) => /^https?:\/\//.test(u));
+  return { name: `${title || tag(item, "brandName")} ${found}`, style: found, images, from: "SanMar", exact: true };
+}
+
+/** POST /api/lookup/style?brand= {style} -> {name, style, photo, from}: asks S&S and SanMar together. */
 export async function lookupStyle(req: Request, env: Env, c: Caller, brand: string) {
   const b = await body<{ style?: string }>(req);
   const typed = String(b.style ?? "").trim().slice(0, 60);
   if (!typed) throw new HttpError(400, "Type a style number first");
-  if (!env.SS_ACCOUNT || !env.SS_API_KEY) throw new HttpError(503, "Style number lookup isn't set up yet. Fill this product in by hand.");
-  const hit = pickStyle(await ssSearch(env, typed), typed);
-  if (!hit) throw new HttpError(404, `Couldn't find style ${typed} at S&S. Check the number, or fill this product in by hand.`);
+  const asks: Promise<Found | null>[] = [];
+  if (env.SS_ACCOUNT && env.SS_API_KEY) asks.push(fromSs(env, typed));
+  if (env.SANMAR_CUSTOMER && env.SANMAR_USER && env.SANMAR_PASSWORD) asks.push(fromSanmar(env, typed));
+  if (!asks.length) throw new HttpError(503, "Style number lookup isn't set up yet. Fill this product in by hand.");
+
+  const answers = await Promise.allSettled(asks);
+  const hits = answers.flatMap((a) => (a.status === "fulfilled" && a.value ? [a.value] : []));
+  // An exact style match beats a near one; with two exact matches, the first supplier asked wins.
+  const hit = hits.find((h) => h.exact) ?? hits[0];
+  if (!hit) {
+    const failed = answers.find((a): a is PromiseRejectedResult => a.status === "rejected");
+    if (failed) throw failed.reason;
+    throw new HttpError(404, `Couldn't find style ${typed} at ${asks.length > 1 ? "S&S or SanMar" : env.SS_ACCOUNT ? "S&S" : "SanMar"}. Check the number, or fill this product in by hand.`);
+  }
 
   let photo = null;
-  if (hit.styleImage) {
-    const small = new URL(hit.styleImage, SS_IMAGES).toString();
-    for (const u of new Set([small.replace(/_f[sm](\.\w+)$/, "_fl$1"), small])) {
-      try { photo = await savePhoto(env, c, brand, u, hit.styleName || "product"); } catch (e) { console.error("style image", e); }
-      if (photo) break;
-    }
+  for (const u of new Set(hit.images)) {
+    try { photo = await savePhoto(env, c, brand, u, hit.style || "product"); } catch (e) { console.error("style image", e); }
+    if (photo) break;
   }
-  const name = decode(`${hit.brandName} ${hit.styleName} ${hit.title}`).replace(/\s+/g, " ").trim().slice(0, 120);
-  return json({ name, style: hit.styleName.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, from: "S&S Activewear" });
+  const name = decode(hit.name).replace(/\s+/g, " ").trim().slice(0, 120);
+  return json({ name, style: hit.style.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, from: hit.from });
 }

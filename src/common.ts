@@ -9,6 +9,10 @@ export interface Env {
   SS_ACCOUNT?: string; // S&S Activewear account number, for style number lookups
   SS_API_KEY?: string;
   SS_BASE_URL?: string; // tests only: a stand-in for the S&S API
+  SANMAR_CUSTOMER?: string; // SanMar Web Services: customer number + sanmar.com login
+  SANMAR_USER?: string;
+  SANMAR_PASSWORD?: string;
+  SANMAR_BASE_URL?: string; // tests only: a stand-in for SanMar
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;
