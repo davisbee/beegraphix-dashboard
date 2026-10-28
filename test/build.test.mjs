@@ -135,3 +135,12 @@ test("product lookup refuses addresses that aren't public web pages", async () =
   assert.equal((await call("POST", "/api/lookup/image", T.bgx, { url: "http://10.0.0.1/a.jpg" })).status, 400);
   assert.equal((await call("POST", "/api/lookup", null, { url: "https://example.com" })).status, 401);
 });
+
+test("style number lookup needs a style and the S&S login", async () => {
+  assert.equal((await call("POST", "/api/lookup/style", null, { style: "5000" })).status, 401);
+  assert.equal((await call("POST", "/api/lookup/style", T.bgx, { style: " " })).status, 400);
+  // .dev.vars.example has no S&S login, so the lookup says it isn't set up rather than failing.
+  const r = await call("POST", "/api/lookup/style", T.bgx, { style: "5000" });
+  assert.equal(r.status, 503);
+  assert.match(r.data.error, /isn't set up/);
+});

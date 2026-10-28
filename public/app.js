@@ -360,7 +360,7 @@ async function pageNew() {
         <div class="pgrid">
           <div class="field wide"><label for="pl${i}">Product link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="Paste the product page, e.g. https://beegraphix.com/…"><div class="hint" data-linkstate="${i}"></div></div>
           <div class="field"><label for="pn${i}">Product name</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
-          <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" placeholder="e.g. CT104050"></div>
+          <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" data-stylebox="${i}" placeholder="e.g. 5000 or Gildan 5000"></div>
           <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}</div>
         </div></div>`).join("")}
     </div>
@@ -498,21 +498,20 @@ async function pageNew() {
   // A file dropped anywhere else would make the browser leave the page and lose uploads in progress.
   ["dragover", "drop"].forEach((t) => form.addEventListener(t, (e) => e.preventDefault()));
 
-  // Paste a product link: fill in whatever is still blank (name, style number, photo).
+  // Paste a product link, or type a style number: fill in whatever is still blank (name, style number, photo).
+  // A field still holding what an earlier lookup put there (or leftover page code) can be refilled.
+  const open = (cur, prev) => !String(cur ?? "").trim() || cur === prev || /&#?x?\w+;/.test(cur);
   const lookedUp = new Set();
-  const lookup = async (i) => {
+  const fillFrom = async (i, key, how, path, payload, where) => {
     const p = v.products[i];
-    const link = p.link.trim();
-    const out = form.querySelector(`[data-linkstate="${i}"]`);
-    // A field still holding what an earlier lookup put there (or leftover page code) can be refilled.
     const auto = p.auto || {};
-    const open = (cur, prev) => !String(cur ?? "").trim() || cur === prev || /&#?x?\w+;/.test(cur);
-    if (!link || lookedUp.has(`${i}:${link}`) || (!open(p.name, auto.name) && !open(p.style, auto.style) && p.photo && p.photo !== auto.photo)) return;
-    lookedUp.add(`${i}:${link}`);
-    out.textContent = "Reading that page…";
+    const out = form.querySelector(`[data-linkstate="${i}"]`);
+    if (lookedUp.has(key)) return;
+    lookedUp.add(key);
+    out.textContent = how;
     busy.add(`link${i}`);
     try {
-      const r = await api("POST", `/api/lookup?brand=${state.brand}`, { url: link });
+      const r = await api("POST", `${path}?brand=${state.brand}`, payload);
       const got = [];
       if (r.name && open(p.name, auto.name)) { p.name = r.name; got.push("name"); }
       if (r.style && open(p.style, auto.style)) { p.style = r.style; got.push("style number"); }
@@ -521,11 +520,26 @@ async function pageNew() {
       save();
       fill();
       slotUi[`photo${i}`].show();
-      out.textContent = got.length ? `Filled in the ${got.join(", ").replace(/, ([^,]*)$/, " and $1")} from the page. Check them.` : "Nothing new on that page; what's here stays.";
+      out.textContent = got.length ? `Filled in the ${got.join(", ").replace(/, ([^,]*)$/, " and $1")} from ${r.from || where}. Check them.` : `Nothing new from ${r.from || where}; what's here stays.`;
     } catch (err) {
       out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
-      lookedUp.delete(`${i}:${link}`);
+      lookedUp.delete(key);
     } finally { busy.delete(`link${i}`); }
+  };
+  const lookup = (i) => {
+    const p = v.products[i];
+    const auto = p.auto || {};
+    const link = p.link.trim();
+    if (!link || (!open(p.name, auto.name) && !open(p.style, auto.style) && p.photo && p.photo !== auto.photo)) return;
+    return fillFrom(i, `${i}:${link}`, "Reading that page…", "/api/lookup", { url: link }, "the page");
+  };
+  const lookupStyle = (i) => {
+    const p = v.products[i];
+    const auto = p.auto || {};
+    const style = p.style.trim();
+    // Only when someone typed it (not a style an earlier lookup filled in) and something is still missing.
+    if (!style || style === auto.style || (!open(p.name, auto.name) && p.photo && p.photo !== auto.photo)) return;
+    return fillFrom(i, `${i}:style:${style}`, "Looking up that style…", "/api/lookup/style", { style }, "the supplier");
   };
   form.querySelectorAll("[data-link]").forEach((el) => {
     const i = +el.dataset.link;
@@ -534,6 +548,7 @@ async function pageNew() {
     // Clean up names an earlier version filled in with leftover page code.
     if (/&#?x?\w+;/.test(v.products[i].name) && v.products[i].link.trim()) lookup(i);
   });
+  form.querySelectorAll("[data-stylebox]").forEach((el) => el.addEventListener("change", () => lookupStyle(+el.dataset.stylebox)));
 
   $("#draftBtn").onclick = async () => {
     const btn = $("#draftBtn");
