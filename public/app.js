@@ -504,16 +504,20 @@ async function pageNew() {
     const p = v.products[i];
     const link = p.link.trim();
     const out = form.querySelector(`[data-linkstate="${i}"]`);
-    if (!link || lookedUp.has(`${i}:${link}`) || (p.name.trim() && p.style.trim() && p.photo)) return;
+    // A field still holding what an earlier lookup put there (or leftover page code) can be refilled.
+    const auto = p.auto || {};
+    const open = (cur, prev) => !String(cur ?? "").trim() || cur === prev || /&#?x?\w+;/.test(cur);
+    if (!link || lookedUp.has(`${i}:${link}`) || (!open(p.name, auto.name) && !open(p.style, auto.style) && p.photo && p.photo !== auto.photo)) return;
     lookedUp.add(`${i}:${link}`);
     out.textContent = "Reading that page…";
     busy.add(`link${i}`);
     try {
       const r = await api("POST", `/api/lookup?brand=${state.brand}`, { url: link });
       const got = [];
-      if (r.name && !p.name.trim()) { p.name = r.name; got.push("name"); }
-      if (r.style && !p.style.trim()) { p.style = r.style; got.push("style number"); }
-      if (r.photo && !p.photo) { p.photo = r.photo.id; p.photoName = r.photo.name; got.push("photo"); }
+      if (r.name && open(p.name, auto.name)) { p.name = r.name; got.push("name"); }
+      if (r.style && open(p.style, auto.style)) { p.style = r.style; got.push("style number"); }
+      if (r.photo && (!p.photo || p.photo === auto.photo)) { p.photo = r.photo.id; p.photoName = r.photo.name; got.push("photo"); }
+      p.auto = { name: r.name ? p.name : auto.name, style: r.style ? p.style : auto.style, photo: r.photo ? p.photo : auto.photo };
       save();
       fill();
       slotUi[`photo${i}`].show();
@@ -527,6 +531,8 @@ async function pageNew() {
     const i = +el.dataset.link;
     el.addEventListener("change", () => lookup(i));
     el.addEventListener("paste", () => setTimeout(() => { set(el.dataset.k, el.value); save(); lookup(i); }, 0));
+    // Clean up names an earlier version filled in with leftover page code.
+    if (/&#?x?\w+;/.test(v.products[i].name) && v.products[i].link.trim()) lookup(i);
   });
 
   $("#draftBtn").onclick = async () => {
@@ -573,7 +579,7 @@ async function pageNew() {
         template: "top5", title: v.title, goal: v.goal, audience: v.audience, look: v.look,
         presenter: { mode: "self", name: v.presenter.name, title: v.presenter.title },
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
-        products: v.products.map(({ photoName, ...p }) => p), footage: v.footage,
+        products: v.products.map(({ photoName, auto, ...p }) => p), footage: v.footage,
       };
       const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, draft: v.draft, spec });
       store(key, "");
