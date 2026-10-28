@@ -197,3 +197,6 @@ textarea { resize: vertical; }
 .draft > .small { grid-column: 1; }
 .draft > .row { grid-column: 2; grid-row: 1 / span 2; gap: 8px; }
 #drafts .card { margin-bottom: 16px; }
+.slugrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.slugrow input { flex: 1; min-width: 160px; }
+#postCard .notice ul { margin: 6px 0; padding-left: 20px; }

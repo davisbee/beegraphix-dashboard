@@ -191,6 +191,89 @@ async function pageVideos() {
   await refresh();
 }
 
+// ---------- approve and post (posts.ts on the server) ----------
+
+const PAGE_BOXES = [
+  ["headline", "Headline", "input"], ["eyebrow", "Small label above it", "input"], ["dek", "Under the headline", "textarea"],
+  ["intro", "First lines of the article", "textarea"], ["title", "Title in Google and the browser tab", "input"], ["description", "Description in Google", "textarea"],
+];
+const CAPTION_BOXES = [
+  ["instagram", "Instagram"], ["facebook", "Facebook"], ["linkedin", "LinkedIn"], ["tiktok", "TikTok"], ["youtubeTitle", "YouTube title"], ["youtube", "YouTube description"],
+];
+
+async function showPosting(j) {
+  const box = $("#posting");
+  if (!box) return;
+  const d = await api("GET", `/api/jobs/${j.id}/post`);
+  if (!$("#posting")) return;
+  if (!d.supported) { box.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="muted small" style="margin:0">${esc(d.why)} For now, download the video.</p></div>`; return; }
+  const p = d.post;
+  const copy = p?.copy ?? { page: {}, captions: {} };
+  const task = p?.task;
+  const busy = !!task?.busy;
+  const live = !!(p?.liveUrl || p?.posted);
+  const locked = busy || live;
+  const link = d.link;
+  const field = (key, label, kind, val, hint = "") => `<div class="field"><label for="pf-${key.replace(".", "-")}">${esc(label)}</label>${kind === "textarea"
+    ? `<textarea id="pf-${key.replace(".", "-")}" rows="${key.startsWith("captions.") && !key.endsWith("Title") ? 5 : 2}" data-pk="${key}" ${locked ? "disabled" : ""}>${esc(val ?? "")}</textarea>`
+    : `<input type="text" id="pf-${key.replace(".", "-")}" data-pk="${key}" value="${esc(val ?? "")}" ${locked ? "disabled" : ""}>`}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
+  const taskLine = !task ? "" : task.busy
+    ? `<div class="notice">${task.kind === "page" ? "The desktop is building the preview" : "The desktop is posting"}… <span class="muted small">${esc(task.message ?? "")}</span></div>`
+    : task.status === "failed" ? `<div class="error">${task.kind === "page" ? "The preview didn't build" : "Posting didn't finish"}: ${esc((task.message ?? "").split("\n")[0])}</div>` : "";
+  const posted = (p?.posted ?? []).map((x) => `<li>${esc(x.platform ?? x.key)}${x.scheduleDate ? `: ${esc(when(x.scheduleDate))}` : ""}${x.status ? ` <span class="muted small">(${esc(x.status)})</span>` : ""}</li>`).join("");
+  box.innerHTML = `<div class="card" id="postCard"><h2>Page and posts</h2>
+    ${live ? `<div class="notice"><b>Posted.</b> ${p.liveUrl ? `The page is live at <a href="${esc(p.liveUrl)}" target="_blank" rel="noopener">${esc(p.liveUrl.replace(/^https:\/\//, ""))}</a>.` : ""}${posted ? ` Scheduled in HighLevel:<ul class="small">${posted}</ul>` : " Check HighLevel's Social Planner for the posts."}<div class="small muted">Approved by ${esc(p.approvedBy ?? "")}, ${esc(when(p.approvedAt))}</div></div>`
+      : `<p class="muted small" style="margin:0 0 14px">${d.program
+        ? `Posts link to the program's own page: <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link.replace(/^https?:\/\//, ""))}</a>.`
+        : "Every video gets its own page on blog.beegraphix.com with the video, the products and a quote form that goes to HighLevel."} Nothing goes public until an admin presses Approve.</p>`}
+    ${taskLine}
+    ${locked ? "" : `<div class="row" style="margin-bottom:16px"><button class="btn dark" type="button" id="postDraft">${p ? "Write It Again" : "Write It For Me"}</button><span class="small muted" id="postDraftState">${p ? "" : "Claude writes the page and captions from the script. Or fill them in yourself."}</span></div>`}
+    <div id="postErr"></div>
+    ${`
+      ${d.program ? "" : `<h3 class="sub">The page</h3>
+        <div class="field"><label for="pf-slug">Page address</label><div class="slugrow"><span class="muted">blog.beegraphix.com/</span><input type="text" id="pf-slug" data-pk="slug" value="${esc(p?.slug ?? d.suggestedSlug ?? "")}" ${locked ? "disabled" : ""}></div></div>
+        ${PAGE_BOXES.map(([k, l, kind]) => field(`page.${k}`, l, kind, copy.page[k])).join("")}`}
+      <h3 class="sub">Captions</h3><p class="muted small" style="margin:0 0 10px">Leave one empty to skip that site. <b>{url}</b> becomes the link to ${d.program ? "the program page" : "the page"}, tagged so you can see which post a quote came from.</p>
+      ${CAPTION_BOXES.map(([k, l]) => field(`captions.${k}`, l, k === "youtubeTitle" ? "input" : "textarea", copy.captions[k])).join("")}
+      <div class="field" style="max-width:240px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
+      ${p?.previewUrl && !live ? `<div class="notice">Preview ready: <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">open the page</a>. Check it on your phone too.</div>` : ""}
+      ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button>${d.program ? "" : `<button class="btn outline" type="button" id="postPreview">Build Preview</button>`}${d.canApprove
+        ? `<button class="btn" type="button" id="postApprove">Approve and Post</button>` : `<span class="small muted">An admin approves and posts.</span>`}</div>
+        <p class="small muted" id="postState" style="margin:10px 0 0"></p>`}`}
+  </div>`;
+
+  const err = (e) => { const el = $("#postErr"); if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; };
+  const values = () => {
+    const out = { copy: { page: { ...copy.page }, captions: { ...copy.captions } } };
+    box.querySelectorAll("[data-pk]").forEach((el) => {
+      const [a, b] = el.dataset.pk.split(".");
+      if (b) out.copy[a][b] = el.value; else out[a] = el.value;
+    });
+    return out;
+  };
+  const saveIt = () => api("PUT", `/api/jobs/${j.id}/post`, values());
+  const again = () => showPosting(j).catch(err);
+  // fn returns false when the person backed out of a confirm.
+  const press = (id, fn) => { const b = $(`#${id}`); if (b) b.onclick = async () => { b.disabled = true; $("#postErr").innerHTML = ""; try { if ((await fn()) === false) b.disabled = false; } catch (e) { err(e); b.disabled = false; } }; };
+  press("postDraft", async () => {
+    if (p && !confirm("Replace the page copy and captions with a new draft?")) return false;
+    $("#postDraftState").textContent = "Claude is writing… (about 20 seconds)";
+    await api("POST", `/api/jobs/${j.id}/post/draft`).finally(() => { const el = $("#postDraftState"); if (el) el.textContent = ""; });
+    await again();
+  });
+  press("postSave", async () => { await saveIt(); $("#postState").textContent = "Saved."; return false; });
+  press("postPreview", async () => { await saveIt(); await api("POST", `/api/jobs/${j.id}/post/preview`); await again(); });
+  press("postApprove", async () => {
+    const v = values();
+    const what = d.program ? "The posts get scheduled" : `The page goes live at blog.beegraphix.com/${v.slug} and the posts get scheduled`;
+    if (!confirm(`Approve and post? ${what} in HighLevel for ${v.start}.`)) return false;
+    await saveIt();
+    await api("POST", `/api/jobs/${j.id}/post/approve`, { start: v.start });
+    await again();
+  });
+  if (busy) { stopTimer(); state.timer = setTimeout(() => { if ($("#postCard")) again(); }, 5000); }
+}
+
 async function pageVideo(id) {
   shell("videos", `<div id="detail"><div class="card empty">Loading…</div></div>`);
   await loadCatalog().catch(() => {});
@@ -229,7 +312,7 @@ async function pageVideo(id) {
             </dl>
             <div class="row" style="margin-top:20px">${actions}</div>
           </div>
-          ${j.status === "done" ? `<div class="card"><h2>Posting</h2><p class="muted small" style="margin:0">Approve and post to your social accounts is coming next. For now, download the video.</p></div>` : ""}
+          ${j.status === "done" ? `<div id="posting"></div>` : ""}
         </div>
       </div>`;
     if (player === null) {
@@ -240,6 +323,7 @@ async function pageVideo(id) {
     } else box.innerHTML = html;
     const cancel = $("#cancel");
     if (cancel) cancel.onclick = async () => { cancel.disabled = true; await api("POST", `/api/jobs/${j.id}/cancel`).catch((e) => alert(e.message)); refresh(); };
+    if ($("#posting")) showPosting(j).catch((e) => { const b = $("#posting"); if (b) b.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="bad">${esc(e.message)}</p></div>`; });
     stopTimer();
     if (ACTIVE.includes(j.status)) state.timer = setTimeout(() => refresh().catch(() => {}), 4000);
   };
