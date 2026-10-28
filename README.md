@@ -56,6 +56,8 @@ whose campaign is painted with a different brand kit.
 | | `GET /api/jobs/:id/video` | the finished MP4 (seekable; `?download` saves it) |
 | | `POST /api/jobs` `{kind: "build", spec, draft?, brand?}` | New video: the desktop builds a campaign from the spec, then renders it |
 | | `POST /api/uploads?brand=` `{kind, name, type, size}`, `PUT /api/uploads/:id/part?n=`, `POST /api/uploads/:id/complete` | footage (MP4/MOV, 4 GB) and photos (JPG/PNG/WebP, 25 MB) from the browser, in 20 MB pieces |
+| | `POST /api/lookup?brand=` `{url}`, `POST /api/lookup/image?brand=` `{url}` | fill a product from its page (name, style number, photo from schema.org Product data / Open Graph), or save a photo dragged from another page |
+| | `GET /api/uploads/:id/file` | a product photo, shown as a thumbnail on the New video screen |
 | | `POST /api/draft?brand=` | "Draft it for me": Claude writes the hook, five product lines and payoff (30 an hour per person) |
 | | `GET /api/catalog` | campaigns and versions on the desktop |
 | admins | `GET/POST /api/users`, `POST /api/users/:id`, `POST /api/users/:id/reset` | Team page |

@@ -333,7 +333,7 @@ async function pageNew() {
   const choice = (name, value, title, sub, disabled) =>
     `<label class="choice${disabled ? " off" : ""}"><input type="radio" name="${name}" value="${value}" ${disabled ? "disabled" : ""}><span><b>${esc(title)}</b><span class="small muted">${esc(sub)}</span></span></label>`;
   const slot = (id, label, accept, hint) =>
-    `<div class="slot" data-slot="${id}"><div class="slot-label">${esc(label)}</div><label class="btn outline small slot-pick">Choose File<input type="file" accept="${accept}" hidden></label><span class="slot-state small muted">${esc(hint)}</span></div>`;
+    `<div class="slot" data-slot="${id}"><img class="slot-thumb" alt="" hidden><div class="slot-label">${esc(label)}</div><label class="btn outline small slot-pick">Choose File<input type="file" accept="${accept}" hidden></label><span class="slot-state small muted">${esc(hint)}</span><span class="slot-drop small muted">or drag it here</span></div>`;
 
   shell("new", `${header(brandName(state.brand), "New Video", "Fill this in top to bottom. The desktop builds the video and it shows up in Videos when it's ready. Your progress saves on this computer as you go.")}
   <form id="nv" novalidate>
@@ -354,13 +354,13 @@ async function pageNew() {
       </div>
     </div>
 
-    <div class="card"><div class="step">3</div><h2>The five products</h2><p class="muted small" style="margin:0 0 16px">Ranked, #1 first. The style number and link are optional. A clean product photo on white works best.</p>
+    <div class="card"><div class="step">3</div><h2>The five products</h2><p class="muted small" style="margin:0 0 16px">Ranked, #1 first. Paste each product's link and the name, style number and photo fill in by themselves. Or type them, and drag a photo onto the Photo box. A clean photo on white works best.</p>
       ${v.products.map((_, i) => `<div class="product" data-i="${i}">
         <div class="pnum">#${i + 1}</div>
         <div class="pgrid">
+          <div class="field wide"><label for="pl${i}">Product link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="Paste the product page, e.g. https://beegraphix.com/…"><div class="hint" data-linkstate="${i}"></div></div>
           <div class="field"><label for="pn${i}">Product name</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
           <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" placeholder="e.g. CT104050"></div>
-          <div class="field wide"><label for="pl${i}">Link</label><input type="text" id="pl${i}" data-k="products.${i}.link" placeholder="https://"></div>
           <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}</div>
         </div></div>`).join("")}
     </div>
@@ -440,21 +440,24 @@ async function pageNew() {
   const slotInfo = (id) => (id.startsWith("photo")
     ? { kind: "photo", get: () => [v.products[+id.slice(5)].photo, v.products[+id.slice(5)].photoName], put: (u, n) => { v.products[+id.slice(5)].photo = u; v.products[+id.slice(5)].photoName = n; } }
     : { kind: "footage", get: () => [v.footage[id.slice(5)], v.footageNames[id.slice(5)]], put: (u, n) => { const c = id.slice(5); if (u) { v.footage[c] = u; v.footageNames[c] = n; } else { delete v.footage[c]; delete v.footageNames[c]; } } });
+  const slotUi = {};
   form.querySelectorAll("[data-slot]").forEach((el) => {
     const id = el.dataset.slot;
     const info = slotInfo(id);
     const stateEl = $(".slot-state", el);
+    const thumb = $(".slot-thumb", el);
     const show = () => {
       const [up, name] = info.get();
       el.classList.toggle("done", !!up);
       stateEl.innerHTML = up ? `✓ ${esc(name)} <button type="button" class="linkbtn dark" data-clear>Remove</button>` : esc(info.kind === "photo" ? "No photo yet" : "Not uploaded");
       const clr = $("[data-clear]", stateEl);
       if (clr) clr.onclick = () => { info.put(null, ""); save(); show(); };
+      if (info.kind === "photo") {
+        thumb.hidden = !up;
+        if (up) thumb.src = `/api/uploads/${up}/file`;
+      }
     };
-    show();
-    $("input[type=file]", el).onchange = async (e) => {
-      const file = e.target.files[0];
-      e.target.value = "";
+    const take = async (file) => {
       if (!file) return;
       busy.add(id);
       el.classList.remove("done");
@@ -468,6 +471,62 @@ async function pageNew() {
         stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
       } finally { busy.delete(id); }
     };
+    slotUi[id] = { show };
+    show();
+    $("input[type=file]", el).onchange = (e) => { const file = e.target.files[0]; e.target.value = ""; take(file); };
+    // Drag a file from the desktop (or a photo from another browser tab) onto the box.
+    el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("over"); });
+    el.addEventListener("dragleave", () => el.classList.remove("over"));
+    el.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      el.classList.remove("over");
+      const file = e.dataTransfer.files[0];
+      if (file) return take(file);
+      const url = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
+      if (url && info.kind === "photo") {
+        // A photo dragged out of a web page arrives as its address; fetch it on our side and save it.
+        stateEl.textContent = "Getting that photo…";
+        try {
+          const r = await api("POST", `/api/lookup/image?brand=${state.brand}`, { url: url.split("\n")[0].trim() });
+          info.put(r.photo.id, r.photo.name);
+          save();
+          show();
+        } catch (err) { stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`; }
+      }
+    });
+  });
+  // A file dropped anywhere else would make the browser leave the page and lose uploads in progress.
+  ["dragover", "drop"].forEach((t) => form.addEventListener(t, (e) => e.preventDefault()));
+
+  // Paste a product link: fill in whatever is still blank (name, style number, photo).
+  const lookedUp = new Set();
+  const lookup = async (i) => {
+    const p = v.products[i];
+    const link = p.link.trim();
+    const out = form.querySelector(`[data-linkstate="${i}"]`);
+    if (!link || lookedUp.has(`${i}:${link}`) || (p.name.trim() && p.style.trim() && p.photo)) return;
+    lookedUp.add(`${i}:${link}`);
+    out.textContent = "Reading that page…";
+    busy.add(`link${i}`);
+    try {
+      const r = await api("POST", `/api/lookup?brand=${state.brand}`, { url: link });
+      const got = [];
+      if (r.name && !p.name.trim()) { p.name = r.name; got.push("name"); }
+      if (r.style && !p.style.trim()) { p.style = r.style; got.push("style number"); }
+      if (r.photo && !p.photo) { p.photo = r.photo.id; p.photoName = r.photo.name; got.push("photo"); }
+      save();
+      fill();
+      slotUi[`photo${i}`].show();
+      out.textContent = got.length ? `Filled in the ${got.join(", ").replace(/, ([^,]*)$/, " and $1")} from the page. Check them.` : "Nothing new on that page; what's here stays.";
+    } catch (err) {
+      out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+      lookedUp.delete(`${i}:${link}`);
+    } finally { busy.delete(`link${i}`); }
+  };
+  form.querySelectorAll("[data-link]").forEach((el) => {
+    const i = +el.dataset.link;
+    el.addEventListener("change", () => lookup(i));
+    el.addEventListener("paste", () => setTimeout(() => { set(el.dataset.k, el.value); save(); lookup(i); }, 0));
   });
 
   $("#draftBtn").onclick = async () => {

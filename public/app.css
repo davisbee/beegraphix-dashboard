@@ -182,3 +182,8 @@ textarea { resize: vertical; }
   .pnum { line-height: 28px; }
   .step { top: 20px; right: 20px; }
 }
+.slot.over { border-color: var(--hive); border-style: solid; background: var(--surface-alt); }
+.slot-thumb { width: 48px; height: 48px; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.slot-drop { margin-left: auto; }
+.slot.done .slot-drop { display: none; }
+@media (max-width: 760px) { .slot-drop { display: none; } }

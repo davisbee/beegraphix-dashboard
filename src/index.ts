@@ -12,6 +12,9 @@
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
 //     PUT  /api/uploads/:id/part?n=1  raw bytes of one piece      POST /api/uploads/:id/complete {parts}
+//     POST /api/lookup?brand=         {url} -> {name, style, photo} read from a product page
+//     POST /api/lookup/image?brand=   {url} -> {photo}: a photo dragged out of another web page
+//     GET  /api/uploads/:id/file      a product photo, to show it on the New video screen
 //     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
@@ -31,7 +34,8 @@
 
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
-import { desktopDownload, finishUpload, startUpload, uploadPiece } from "./uploads";
+import { lookupImage, lookupProduct } from "./lookup";
+import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, resetPassword, sameString, sessionUser, updateUser, type Caller,
 } from "./auth";
@@ -386,9 +390,12 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (um && m === "POST") return um[2] ? resetPassword(env, c, um[1]) : updateUser(req, env, c, um[1]);
 
   if (p === "/api/uploads" && m === "POST") return startUpload(req, env, c, brandFor(c, url.searchParams.get("brand")));
-  const up = p.match(/^\/api\/uploads\/([0-9a-f-]{36})\/(part|complete)$/);
+  const up = p.match(/^\/api\/uploads\/([0-9a-f-]{36})\/(part|complete|file)$/);
+  if (up && up[2] === "file" && m === "GET") return viewPhoto(env, c, up[1]);
   if (up && up[2] === "part" && m === "PUT") return uploadPiece(req, url, env, c, up[1]);
   if (up && up[2] === "complete" && m === "POST") return finishUpload(req, env, c, up[1]);
+  if (p === "/api/lookup/image" && m === "POST") return lookupImage(req, env, c, brandFor(c, url.searchParams.get("brand")));
+  if (p === "/api/lookup" && m === "POST") return lookupProduct(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/draft" && m === "POST") return draftScript(req, env, c, brandFor(c, url.searchParams.get("brand")));
 
   if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
