@@ -4,6 +4,7 @@
 // a campaign from it (new-campaign.mjs), downloads the footage and photos, keys green screen clips,
 // writes captions, then renders it.
 import Anthropic from "@anthropic-ai/sdk";
+import { BRAND_VOICE } from "./voice";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { HttpError, body, json, now, type Env } from "./common";
@@ -153,7 +154,7 @@ export const DRAFTS_PER_HOUR = 30;
 export const MODEL = "claude-opus-5-5";
 
 export const BRAND_NOTES: Record<string, string> = {
-  beegraphix: "BeeGraphix decorates custom company apparel (embroidery and screen printing) in Fredericktown, PA. Viewers are business owners and managers buying gear for their crew. Every video ends by sending people to pick favorites and get custom pricing with their logo.",
+  beegraphix: "BeeGraphix decorates custom apparel (in-house DTF printing and embroidery) in Fredericktown, PA. Viewers are business owners and managers buying gear for their crew. Every video ends by sending people to pick favorites and get custom pricing with their logo.",
   rugbee: "Rugbee is a division of BeeGraphix (rugbee.co). Keep claims to what the person tells you about the products.",
 };
 const GOAL_NOTES: Record<string, string> = {
@@ -202,6 +203,7 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
     `Write the script for a vertical social video (Reels, TikTok, Shorts) spoken to camera by ${str(b.presenter, 80) || "the presenter"}. It's ${f.brief}.`,
     "Style: a hard hook in the first second, short punchy sentences, one idea per beat, one clear call to action.",
     BRAND_NOTES[brand] ?? "",
+    BRAND_VOICE[brand] ?? "",
     GOAL_NOTES[goal],
     b.audience ? `Audience: ${str(b.audience, 200)}` : "",
     b.topic ? `What the video is about: ${str(b.topic, 300)}` : "",
