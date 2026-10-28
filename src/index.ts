@@ -8,7 +8,11 @@
 //   Staff (session cookie, or Authorization: Bearer <one of SUBMIT_TOKENS>)
 //     POST /api/login {email, password}   POST /api/logout   GET /api/me   POST /api/me/password {current, next}
 //     GET  /api/catalog               campaigns and variants on the desktop
-//     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job
+//     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
+//     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
+//     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
+//     PUT  /api/uploads/:id/part?n=1  raw bytes of one piece      POST /api/uploads/:id/complete {parts}
+//     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
@@ -18,6 +22,7 @@
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
 //     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}]}
+//     GET  /api/desktop/uploads/:id               a file staff uploaded for a build job
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
 //     POST /api/desktop/jobs/:id/upload/start     -> starts an R2 multipart upload
@@ -25,6 +30,8 @@
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
 
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
+import { campaignId, draftScript, validateSpec } from "./build";
+import { desktopDownload, finishUpload, startUpload, uploadPiece } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, resetPassword, sameString, sessionUser, updateUser, type Caller,
 } from "./auth";
@@ -127,19 +134,33 @@ async function activeJob(env: Env, id: string) {
 
 // ---------- submit side ----------
 
+/** The brand a request acts for: the caller's own, or the one a "*" caller names. */
+function brandFor(c: Caller, asked: unknown) {
+  const brand = c.brand === "*" ? asked : c.brand;
+  if (typeof brand !== "string" || !(BRANDS as readonly string[]).includes(brand)) throw new HttpError(400, `brand must be one of ${BRANDS.join(", ")}`);
+  if (c.brand !== "*" && asked && asked !== c.brand) throw new HttpError(403, "You can only submit jobs for your own brand");
+  return brand;
+}
+
 async function createJob(req: Request, env: Env, c: Caller) {
-  const b = await body<{ brand?: string; campaign?: string; variant?: string; draft?: boolean }>(req);
-  const brand = c.brand === "*" ? b.brand : c.brand;
-  if (!brand || !(BRANDS as readonly string[]).includes(brand)) throw new HttpError(400, `brand must be one of ${BRANDS.join(", ")}`);
-  if (c.brand !== "*" && b.brand && b.brand !== c.brand) throw new HttpError(403, "You can only submit jobs for your own brand");
-  if (!b.campaign || !SLUG.test(b.campaign)) throw new HttpError(400, "campaign must be a campaign id (lowercase letters, numbers, dashes)");
-  if (!b.variant || !SLUG.test(b.variant)) throw new HttpError(400, "variant must be a variant id (lowercase letters, numbers, dashes)");
+  const b = await body<{ kind?: string; brand?: string; campaign?: string; variant?: string; draft?: boolean; spec?: unknown }>(req);
+  const brand = brandFor(c, b.brand);
   const id = crypto.randomUUID();
+  let kind = "render";
+  let payload: Record<string, unknown>;
+  if (b.kind === "build") {
+    const spec = await validateSpec(env, brand, b.spec);
+    kind = "build";
+    payload = { campaign: campaignId(spec.title, id), variant: spec.look, draft: !!b.draft, title: spec.title, spec };
+  } else {
+    if (!b.campaign || !SLUG.test(b.campaign)) throw new HttpError(400, "campaign must be a campaign id (lowercase letters, numbers, dashes)");
+    if (!b.variant || !SLUG.test(b.variant)) throw new HttpError(400, "variant must be a variant id (lowercase letters, numbers, dashes)");
+    payload = { campaign: b.campaign, variant: b.variant, draft: !!b.draft };
+  }
   const t = now();
-  const payload = JSON.stringify({ campaign: b.campaign, variant: b.variant, draft: !!b.draft });
   await env.DB.prepare(
-    "INSERT INTO jobs (id, brand, kind, payload, status, message, created_by, created_at, updated_at) VALUES (?, ?, 'render', ?, 'queued', 'Waiting for the desktop', ?, ?, ?)",
-  ).bind(id, brand, payload, c.label, t, t).run();
+    "INSERT INTO jobs (id, brand, kind, payload, status, message, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 'Waiting for the desktop', ?, ?, ?)",
+  ).bind(id, brand, kind, JSON.stringify(payload), c.label, t, t).run();
   return json(publicJob((await getJob(env, id))!), 201);
 }
 
@@ -330,6 +351,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     requireDesktop(req, env);
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
+    const dl = p.match(/^\/api\/desktop\/uploads\/([0-9a-f-]{36})$/);
+    if (m === "GET" && dl) return desktopDownload(env, dl[1]);
     const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|upload\/start|upload\/part|upload\/complete)$/);
     if (d) {
       const [, id, action] = d;
@@ -361,6 +384,12 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/users" && m === "POST") return createUser(req, env, c);
   const um = p.match(/^\/api\/users\/([0-9a-f-]{36})(?:\/(reset))?$/);
   if (um && m === "POST") return um[2] ? resetPassword(env, c, um[1]) : updateUser(req, env, c, um[1]);
+
+  if (p === "/api/uploads" && m === "POST") return startUpload(req, env, c, brandFor(c, url.searchParams.get("brand")));
+  const up = p.match(/^\/api\/uploads\/([0-9a-f-]{36})\/(part|complete)$/);
+  if (up && up[2] === "part" && m === "PUT") return uploadPiece(req, url, env, c, up[1]);
+  if (up && up[2] === "complete" && m === "POST") return finishUpload(req, env, c, up[1]);
+  if (p === "/api/draft" && m === "POST") return draftScript(req, env, c, brandFor(c, url.searchParams.get("brand")));
 
   if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
   if (p === "/api/jobs" && m === "GET") return listJobs(url, env, c);

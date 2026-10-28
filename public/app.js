@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/render, #/team, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/new, #/render, #/team, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -74,10 +74,12 @@ async function loadCatalog(force) {
   return state.catalog;
 }
 
+const LOOK_LABEL = { creator: "Creator-style cut", full: "Polished brand reel" };
+
 function jobTitle(j) {
   const c = state.catalog?.find((x) => x.brand === j.brand && x.campaign === j.payload.campaign);
   const v = c?.variants.find((x) => x.id === j.payload.variant);
-  return { title: c?.title ?? j.payload.campaign, variant: v?.label ?? j.payload.variant };
+  return { title: c?.title ?? j.payload.title ?? j.payload.campaign, variant: v?.label ?? LOOK_LABEL[j.payload.variant] ?? j.payload.variant };
 }
 
 function statusPill(j) {
@@ -91,7 +93,8 @@ function statusPill(j) {
 function shell(page, inner) {
   const nav = [
     ["videos", "Videos"],
-    ["render", "Render a video"],
+    ["new", "New video"],
+    ["render", "Render again"],
     ...(state.me.role === "admin" ? [["team", "Team"]] : []),
     ["account", "Account"],
   ];
@@ -150,7 +153,7 @@ function showLogin(message) {
 // ---------- videos ----------
 
 async function pageVideos() {
-  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<a class="btn" href="#/render">Render a Video</a>`)}<div id="list"><div class="card empty">Loading…</div></div>`);
+  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn" href="#/new">New Video</a></div>`)}<div id="list"><div class="card empty">Loading…</div></div>`);
   await loadCatalog().catch(() => {});
   const refresh = async () => {
     const qs = state.brands.length > 1 ? `?brand=${state.brand}` : "";
@@ -162,11 +165,11 @@ async function pageVideos() {
           const t = jobTitle(j);
           const bar = ["claimed", "rendering", "uploading"].includes(j.status) ? `<div class="bar"><span style="width:${Math.round((j.progress ?? 0) * 100)}%"></span></div>` : "";
           return `<a class="job" href="#/videos/${j.id}">
-            <div class="job-title">${esc(t.title)}${j.payload.draft ? '<span class="tag">Preview</span>' : ""}</div>${statusPill(j)}
+            <div class="job-title">${esc(t.title)}${j.kind === "build" ? '<span class="tag">New</span>' : ""}${j.payload.draft ? '<span class="tag">Preview</span>' : ""}</div>${statusPill(j)}
             <div class="job-meta">${esc(t.variant)} · ${esc(j.createdBy ?? "")} · ${esc(ago(j.createdAt))}</div>${bar}
           </a>`;
         }).join("")}</div>`
-      : `<div class="card empty"><p>No videos yet.</p><a class="btn" href="#/render">Render Your First Video</a></div>`;
+      : `<div class="card empty"><p>No videos yet.</p><a class="btn" href="#/new">Make Your First Video</a></div>`;
     stopTimer();
     if (jobs.some((j) => ACTIVE.includes(j.status))) state.timer = setTimeout(() => refresh().catch(() => {}), 5000);
   };
@@ -199,7 +202,7 @@ async function pageVideo(id) {
           <div class="card">
             <div class="eyebrow">${esc(brandName(j.brand))}</div>
             <h1 class="title" style="font-size:26px;line-height:32px">${esc(t.title)}</h1>
-            <p class="muted" style="margin:4px 0 12px">${esc(t.variant)}${j.payload.draft ? " · quick preview (720p)" : ""}</p>
+            <p class="muted" style="margin:4px 0 12px">${esc(t.variant)}${j.payload.draft ? " · quick preview (720p)" : ""}${j.kind === "build" ? " · new video" : ""}</p>
             ${statusPill(j)}
             ${j.status === "failed" && j.message ? `<pre class="log">${esc(j.message)}</pre>` : ""}
             <dl class="facts">
@@ -231,7 +234,7 @@ async function pageVideo(id) {
 // ---------- render a video ----------
 
 async function pageRender(params) {
-  shell("render", `${header(brandName(state.brand), "Render a Video", "Pick a campaign that's already set up on the desktop. It goes in line and renders on its own.")}<div id="form"><div class="card empty">Loading…</div></div>`);
+  shell("render", `${header(brandName(state.brand), "Render Again", "Pick a campaign that's already on the desktop, in any version. To make a brand new one, use New video.")}<div id="form"><div class="card empty">Loading…</div></div>`);
   const all = await loadCatalog(true);
   const list = all.filter((c) => c.brand === state.brand);
   const box = $("#form");
@@ -268,6 +271,259 @@ async function pageRender(params) {
     };
   };
   draw(params.get("variant"));
+}
+
+// ---------- new video ----------
+
+const CLIP_LABEL = { hook: "Hook", p1: "#1", p2: "#2", p3: "#3", p4: "#4", p5: "#5", cta: "Payoff" };
+const VIDEO_TYPES = { mov: "video/quicktime", mp4: "video/mp4", m4v: "video/x-m4v" };
+const PHOTO_TYPES = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
+
+function blankVideo() {
+  return {
+    goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "",
+    presenter: { mode: "self", name: state.me.name, title: "" },
+    hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false,
+    products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "" })),
+    footage: {}, footageNames: {},
+  };
+}
+
+// Sends one file to the dashboard in 20 MB pieces, three at a time. Returns the finished upload.
+async function sendFile(file, kind, onProgress) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const type = file.type || (kind === "footage" ? VIDEO_TYPES : PHOTO_TYPES)[ext] || "";
+  const { upload, partBytes } = await api("POST", `/api/uploads?brand=${state.brand}`, { kind, name: file.name, type, size: file.size });
+  const count = Math.ceil(file.size / partBytes);
+  const parts = new Array(count);
+  let next = 0;
+  let sent = 0;
+  const worker = async () => {
+    while (next < count) {
+      const n = ++next;
+      const blob = file.slice((n - 1) * partBytes, Math.min(n * partBytes, file.size));
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const res = await fetch(`/api/uploads/${upload.id}/part?n=${n}`, { method: "PUT", credentials: "same-origin", headers: { "x-requested-with": "dashboard" }, body: blob });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(out.error || `Upload failed (${res.status})`);
+          parts[n - 1] = out;
+          break;
+        } catch (e) {
+          if (attempt >= 3) throw e;
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+      }
+      sent += blob.size;
+      onProgress(sent / file.size);
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return (await api("POST", `/api/uploads/${upload.id}/complete`, { parts })).upload;
+}
+
+async function pageNew() {
+  const key = `newVideo:${state.brand}`;
+  let v;
+  try { v = { ...blankVideo(), ...JSON.parse(recall(key) || "null") }; } catch { v = blankVideo(); }
+  if (!v || !Array.isArray(v.products) || v.products.length !== 5) v = blankVideo();
+  const save = () => store(key, JSON.stringify(v));
+  const busy = new Set(); // uploads still going
+
+  const choice = (name, value, title, sub, disabled) =>
+    `<label class="choice${disabled ? " off" : ""}"><input type="radio" name="${name}" value="${value}" ${disabled ? "disabled" : ""}><span><b>${esc(title)}</b><span class="small muted">${esc(sub)}</span></span></label>`;
+  const slot = (id, label, accept, hint) =>
+    `<div class="slot" data-slot="${id}"><div class="slot-label">${esc(label)}</div><label class="btn outline small slot-pick">Choose File<input type="file" accept="${accept}" hidden></label><span class="slot-state small muted">${esc(hint)}</span></div>`;
+
+  shell("new", `${header(brandName(state.brand), "New Video", "Fill this in top to bottom. The desktop builds the video and it shows up in Videos when it's ready. Your progress saves on this computer as you go.")}
+  <form id="nv" novalidate>
+    <div class="card"><div class="step">1</div><h2>What's the goal?</h2>
+      <div class="choices three" style="margin-top:12px">
+        ${choice("goal", "reach", "Reach", "New people watch and share")}
+        ${choice("goal", "target", "Target", "Speak to one kind of customer")}
+        ${choice("goal", "sell", "Sell", "Send people to buy")}
+      </div>
+      <div class="field" style="margin-top:18px;margin-bottom:0"><label for="audience">Who's it for?</label><input type="text" id="audience" data-k="audience" placeholder="e.g. Contractors who outfit crews that work outside"></div>
+    </div>
+
+    <div class="card"><div class="step">2</div><h2>Template and look</h2>
+      <div class="choices" style="margin-top:12px">${choice("template", "top5", "Top 5 List", "A hook, five products counted down, and a payoff. About a minute.")}</div>
+      <div class="choices two" style="margin-top:10px">
+        ${choice("look", "creator", "Creator-style cut", "Feels like a person talking, with a music bed. Best for Reels and TikTok.")}
+        ${choice("look", "full", "Polished brand reel", "Full brand graphics on every product.")}
+      </div>
+    </div>
+
+    <div class="card"><div class="step">3</div><h2>The five products</h2><p class="muted small" style="margin:0 0 16px">Ranked, #1 first. The style number and link are optional. A clean product photo on white works best.</p>
+      ${v.products.map((_, i) => `<div class="product" data-i="${i}">
+        <div class="pnum">#${i + 1}</div>
+        <div class="pgrid">
+          <div class="field"><label for="pn${i}">Product name</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
+          <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" placeholder="e.g. CT104050"></div>
+          <div class="field wide"><label for="pl${i}">Link</label><input type="text" id="pl${i}" data-k="products.${i}.link" placeholder="https://"></div>
+          <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}</div>
+        </div></div>`).join("")}
+    </div>
+
+    <div class="card"><div class="step">4</div><h2>Script</h2><p class="muted small" style="margin:0 0 16px">Write it yourself, or tell Claude what the video is about and press Draft It For Me. Then make it sound like you.</p>
+      <div class="field"><label for="topic">What's it about?</label><input type="text" id="topic" data-k="topic" placeholder="e.g. Winter gear your crew will actually wear"></div>
+      <div class="field"><label for="notes">Anything to work in? <span class="muted">(optional)</span></label><textarea id="notes" rows="2" data-k="notes" placeholder="e.g. Mention we embroider in-house. #5 is the one I'd hand out to everybody."></textarea></div>
+      <div class="row" style="margin-bottom:20px"><button class="btn dark" type="button" id="draftBtn">Draft It For Me</button><span class="small muted" id="draftState"></span></div>
+      <div class="scriptpart"><div class="eyebrow">Hook</div>
+        <div class="field"><label for="hook">Opening line, under 4 seconds</label><textarea id="hook" rows="2" data-k="hook"></textarea></div>
+        <div class="field"><label for="hookText">On-screen hook, 6 words or fewer</label><input type="text" id="hookText" data-k="hookText" maxlength="60"></div>
+      </div>
+      <div class="scriptpart"><div class="eyebrow">Middle</div>
+        ${v.products.map((_, i) => `<div class="field"><label for="sc${i}">#${i + 1} <span class="muted" data-pname="${i}"></span></label><textarea id="sc${i}" rows="3" data-k="products.${i}.script" placeholder="Number ${["one", "two", "three", "four", "five"][i]}, the …"></textarea>
+          <div class="grid2 tight"><input type="text" aria-label="#${i + 1} short name on screen" data-k="products.${i}.shortName" placeholder="Name on screen (short)"><input type="text" aria-label="#${i + 1} on-screen tag" data-k="products.${i}.tag" placeholder="Why pick it, 3 to 5 words"></div></div>`).join("")}
+      </div>
+      <div class="scriptpart"><div class="eyebrow">Payoff</div>
+        <div class="field"><label for="cta">Closing line: where to go and what to do</label><textarea id="cta" rows="3" data-k="cta"></textarea></div>
+        <div class="field" style="margin-bottom:0"><label for="link">Where should viewers go? <span class="muted">(optional)</span></label><input type="text" id="link" data-k="link" placeholder="e.g. blog.beegraphix.com/winter"></div>
+      </div>
+    </div>
+
+    <div class="card"><div class="step">5</div><h2>Presenter</h2>
+      <div class="choices two" style="margin-top:12px">
+        ${choice("presenter", "self", "Record yourself", "Film each line on your phone and upload it below.")}
+        ${choice("presenter", "heygen", "AI avatar (HeyGen)", "Coming soon.", true)}
+      </div>
+      <div class="grid2" style="margin-top:18px">
+        <div class="field"><label for="prName">Name on screen</label><input type="text" id="prName" data-k="presenter.name"></div>
+        <div class="field"><label for="prTitle">Title on screen <span class="muted">(optional)</span></label><input type="text" id="prTitle" data-k="presenter.title" placeholder="e.g. Vice President, BeeGraphix"></div>
+      </div>
+      <h3 class="sub">Footage</h3>
+      <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each product, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
+      <label class="check" style="margin-bottom:14px"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
+      <div class="slots">${Object.keys(CLIP_LABEL).map((c) => slot(`clip-${c}`, CLIP_LABEL[c], "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
+    </div>
+
+    <div class="card"><div class="step">6</div><h2>Build it</h2>
+      <div class="field"><label for="title">Video title</label><input type="text" id="title" data-k="title" placeholder="e.g. Top 5 Carhartt Picks for Fall/Winter 2026"></div>
+      <label class="check" style="margin-bottom:18px"><input type="checkbox" data-k="draft"><span>Quick preview first<br><span class="small muted">720p and faster. Check the cut, then use Render Again for the full version.</span></span></label>
+      <div id="err"></div>
+      <div class="row"><button class="btn" type="submit" id="buildBtn">Build My Video</button><button class="btn outline" type="button" id="clearBtn">Start Over</button></div>
+    </div>
+  </form>`);
+
+  const form = $("#nv");
+  const get = (path) => path.split(".").reduce((o, k) => o?.[k], v);
+  const set = (path, val) => {
+    const ks = path.split(".");
+    const last = ks.pop();
+    ks.reduce((o, k) => o[k], v)[last] = val;
+  };
+  const fill = () => {
+    form.querySelectorAll("[data-k]").forEach((el) => {
+      const val = get(el.dataset.k);
+      if (el.type === "checkbox") el.checked = !!val;
+      else el.value = val ?? "";
+    });
+    (form.querySelector(`input[name=goal][value="${v.goal}"]`) ?? form.querySelector("input[name=goal]")).checked = true;
+    (form.querySelector(`input[name=look][value="${v.look}"]`) ?? form.querySelector("input[name=look]")).checked = true;
+    form.querySelector("input[name=template]").checked = true;
+    form.querySelector("input[name=presenter][value=self]").checked = true;
+    names();
+  };
+  const names = () => form.querySelectorAll("[data-pname]").forEach((el) => { el.textContent = v.products[el.dataset.pname].name; });
+  form.addEventListener("input", (e) => {
+    const el = e.target;
+    if (el.dataset.k) set(el.dataset.k, el.type === "checkbox" ? el.checked : el.value);
+    else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
+    else return;
+    if (el.dataset.k?.endsWith(".name")) names();
+    save();
+  });
+  fill();
+
+  // File slots: product photos and the seven footage clips.
+  const slotInfo = (id) => (id.startsWith("photo")
+    ? { kind: "photo", get: () => [v.products[+id.slice(5)].photo, v.products[+id.slice(5)].photoName], put: (u, n) => { v.products[+id.slice(5)].photo = u; v.products[+id.slice(5)].photoName = n; } }
+    : { kind: "footage", get: () => [v.footage[id.slice(5)], v.footageNames[id.slice(5)]], put: (u, n) => { const c = id.slice(5); if (u) { v.footage[c] = u; v.footageNames[c] = n; } else { delete v.footage[c]; delete v.footageNames[c]; } } });
+  form.querySelectorAll("[data-slot]").forEach((el) => {
+    const id = el.dataset.slot;
+    const info = slotInfo(id);
+    const stateEl = $(".slot-state", el);
+    const show = () => {
+      const [up, name] = info.get();
+      el.classList.toggle("done", !!up);
+      stateEl.innerHTML = up ? `✓ ${esc(name)} <button type="button" class="linkbtn dark" data-clear>Remove</button>` : esc(info.kind === "photo" ? "No photo yet" : "Not uploaded");
+      const clr = $("[data-clear]", stateEl);
+      if (clr) clr.onclick = () => { info.put(null, ""); save(); show(); };
+    };
+    show();
+    $("input[type=file]", el).onchange = async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      busy.add(id);
+      el.classList.remove("done");
+      stateEl.textContent = `Uploading ${file.name}… 0%`;
+      try {
+        const up = await sendFile(file, info.kind, (p) => { stateEl.textContent = `Uploading ${file.name}… ${Math.round(p * 100)}%`; });
+        info.put(up.id, file.name);
+        save();
+        show();
+      } catch (err) {
+        stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+      } finally { busy.delete(id); }
+    };
+  });
+
+  $("#draftBtn").onclick = async () => {
+    const btn = $("#draftBtn");
+    const out = $("#draftState");
+    if (v.products.some((p) => !p.name.trim())) { out.innerHTML = `<span class="bad">Name all five products first (step 3).</span>`; return; }
+    const written = [v.hook, v.cta, ...v.products.map((p) => p.script)].some((x) => x.trim());
+    if (written && !confirm("Replace what's in the script now with a new draft?")) return;
+    btn.disabled = true;
+    out.textContent = "Claude is writing… (about 20 seconds)";
+    try {
+      const { draft } = await api("POST", `/api/draft?brand=${state.brand}`, {
+        goal: v.goal, audience: v.audience, topic: v.topic, notes: v.notes, presenter: v.presenter.name,
+        products: v.products.map((p) => ({ name: p.name, link: p.link })),
+      });
+      v.hook = draft.hook;
+      v.hookText = draft.hookText;
+      v.cta = draft.cta;
+      if (!v.title.trim()) v.title = draft.title;
+      draft.products.forEach((d, i) => Object.assign(v.products[i], { script: d.script, shortName: d.shortName, tag: d.tag }));
+      save();
+      fill();
+      out.textContent = "Drafted. Read it out loud and change anything that doesn't sound like you.";
+    } catch (err) {
+      out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
+    }
+    btn.disabled = false;
+  };
+
+  $("#clearBtn").onclick = () => {
+    if (!confirm("Clear this form and start over?")) return;
+    store(key, "");
+    pageNew();
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = $("#err");
+    if (busy.size) { err.innerHTML = `<div class="error">Wait for the uploads to finish first.</div>`; return; }
+    const btn = $("#buildBtn");
+    btn.disabled = true;
+    try {
+      const spec = {
+        template: "top5", title: v.title, goal: v.goal, audience: v.audience, look: v.look,
+        presenter: { mode: "self", name: v.presenter.name, title: v.presenter.title },
+        hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
+        products: v.products.map(({ photoName, ...p }) => p), footage: v.footage,
+      };
+      const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, draft: v.draft, spec });
+      store(key, "");
+      location.hash = `#/videos/${j.id}`;
+    } catch (ex) {
+      err.innerHTML = `<div class="error">${esc(ex.message)}</div>`;
+      btn.disabled = false;
+    }
+  };
 }
 
 // ---------- team ----------
@@ -385,6 +641,7 @@ function route() {
   const fail = (e) => { const m = $("main"); if (m && e.message !== "Please sign in") m.innerHTML = `<div class="card empty">${esc(e.message)}</div>`; };
   if (parts[0] === "videos" && parts[1]) return pageVideo(parts[1]).catch(fail);
   if (parts[0] === "render") return pageRender(params).catch(fail);
+  if (parts[0] === "new") return pageNew().catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
   return pageVideos().catch(fail);
