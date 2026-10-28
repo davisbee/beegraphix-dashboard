@@ -35,7 +35,8 @@
 //
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
-//     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}]}
+//     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}], features?: ["heygen"]}
+//     GET  /api/desktop/heygen/:videoId           an AI avatar clip: {status, url, message} (heygen.ts)
 //     GET  /api/desktop/uploads/:id               a file staff uploaded for a build job
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
@@ -46,12 +47,12 @@
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
 
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
-import { campaignId, draftScript, validateSpec } from "./build";
+import { avatarLines, campaignId, draftScript, validateSpec } from "./build";
 import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
-import { heygenRoute } from "./heygen";
+import { desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
@@ -173,6 +174,10 @@ async function createJob(req: Request, env: Env, c: Caller) {
   let payload: Record<string, unknown>;
   if (b.kind === "build") {
     const spec = await validateSpec(env, brand, b.spec);
+    // AI avatar: HeyGen starts on every line now, so the clips are ready (or nearly) when the desktop claims it.
+    if (spec.presenter.mode === "heygen" && spec.presenter.look) {
+      spec.heygen = await startClips(env, { ...spec.presenter.look, preview: null, type: null }, avatarLines(spec), spec.title);
+    }
     kind = "build";
     payload = { campaign: campaignId(spec.title, id), variant: spec.look, draft: !!b.draft, title: spec.title, spec };
   } else {
@@ -245,7 +250,8 @@ interface CatalogEntry {
 
 /** The desktop reports every campaign on the PC; this replaces the whole list. */
 async function putCatalog(req: Request, env: Env) {
-  const b = await body<{ campaigns?: CatalogEntry[] }>(req);
+  const b = await body<{ campaigns?: CatalogEntry[]; features?: unknown }>(req);
+  await saveDesktopFeatures(env, b.features);
   if (!Array.isArray(b.campaigns) || b.campaigns.length > 500) throw new HttpError(400, "campaigns must be a list");
   const t = now();
   const rows = b.campaigns
@@ -386,6 +392,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     requireDesktop(req, env);
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
+    const hv = p.match(/^\/api\/desktop\/heygen\/([^/]+)$/);
+    if (m === "GET" && hv) return desktopClipStatus(env, decodeURIComponent(hv[1]));
     const dl = p.match(/^\/api\/desktop\/uploads\/([0-9a-f-]{36})$/);
     if (m === "GET" && dl) return desktopDownload(env, dl[1]);
     const st = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
