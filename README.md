@@ -59,6 +59,7 @@ whose campaign is painted with a different brand kit.
 | | `POST /api/lookup?brand=` `{url}`, `POST /api/lookup/image?brand=` `{url}` | fill a product from its page (name, style number, photo from schema.org Product data / Open Graph), or save a photo dragged from another page |
 | | `POST /api/lookup/style?brand=` `{style}` | fill a product from its style number via the S&S Activewear API (secrets `SS_ACCOUNT`, `SS_API_KEY`) and SanMar Web Services (`SANMAR_CUSTOMER`, `SANMAR_USER`, `SANMAR_PASSWORD`), asked together; supplier websites block page reading |
 | | `GET /api/formats` | the video formats (Top 5, Product Spotlight, This vs That, 3 Mistakes, Customer Story, Program Spotlight) and their beats, from `src/formats.ts` |
+| | `GET/POST /api/drafts?brand=`, `GET/PUT/DELETE /api/drafts/:id` | New video drafts saved to finish later (`{title, data}`, data is the form); building one deletes its draft |
 | | `GET /api/uploads/:id/file` | a product photo, shown as a thumbnail on the New video screen |
 | | `POST /api/draft?brand=` | "Draft it for me": Claude writes the hook, five product lines and payoff (30 an hour per person) |
 | | `GET /api/catalog` | campaigns and versions on the desktop |
