@@ -519,6 +519,7 @@ async function pageNew(params = new URLSearchParams()) {
       const p = v.products[+pm[1]];
       if (![p.link, p.name, p.style].some((x) => String(x ?? "").trim()) && (p.photo || p.colors)) {
         Object.assign(p, { photo: null, photoName: "", colors: undefined, color: "", auto: undefined });
+        for (const k of lookedUp) if (k.startsWith(`${pm[1]}:`)) lookedUp.delete(k); // so typing it again looks it up again
         slotUi[`photo${pm[1]}`]?.show();
         showColors(+pm[1]);
       }
@@ -542,7 +543,11 @@ async function pageNew(params = new URLSearchParams()) {
       el.classList.toggle("done", !!up);
       stateEl.innerHTML = up ? `✓ ${esc(name)} <button type="button" class="linkbtn dark" data-clear>Remove</button>` : esc(info.kind === "photo" ? "No photo yet" : "Not uploaded");
       const clr = $("[data-clear]", stateEl);
-      if (clr) clr.onclick = () => { info.put(null, ""); save(); show(); };
+      if (clr) clr.onclick = () => {
+        info.put(null, "");
+        if (info.kind === "photo") { v.products[+id.slice(5)].color = ""; showColors(+id.slice(5)); } // the color was that photo
+        save(); show();
+      };
       if (info.kind === "photo") {
         thumb.hidden = !up;
         if (up) thumb.src = `/api/uploads/${up}/file`;
@@ -629,6 +634,7 @@ async function pageNew(params = new URLSearchParams()) {
       `<option value="${n}"${c.name === p.color ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select><span class="small muted" data-colorstate></span>`;
     const pick = $("[data-colorpick]", box);
     const stateEl = $("[data-colorstate]", box);
+    const back = () => { const n = p.colors.findIndex((c) => c.name === p.color); pick.value = n < 0 ? "" : String(n); }; // after a failed pick
     pick.onchange = async () => {
       if (pick.value === "") return;
       const c = p.colors[+pick.value];
@@ -643,8 +649,14 @@ async function pageNew(params = new URLSearchParams()) {
         save();
         slotUi[`photo${i}`].show();
         stateEl.textContent = "";
-      } catch (err) { stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`; } finally { busy.delete(`color${i}`); }
+      } catch (err) { stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`; back(); } finally { busy.delete(`color${i}`); }
     };
+    // A color with no photo (saved by an earlier version): get its photo again rather than show a color that isn't there.
+    if (p.color && !p.photo) {
+      const n = p.colors.findIndex((c) => c.name === p.color);
+      p.color = "";
+      if (n >= 0) { pick.value = String(n); pick.onchange(); } else back();
+    }
   };
   prods.forEach((_, i) => showColors(i));
   const lookup = (i) => {
