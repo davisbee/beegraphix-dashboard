@@ -20,6 +20,9 @@
 //     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
 //     GET  /api/drafts?brand=         saved New video drafts     POST /api/drafts?brand= {title, data} -> draft
 //     GET/PUT/DELETE /api/drafts/:id  one draft, with its form data (PUT {title, data})
+//     GET/PUT /api/jobs/:id/post      approve and post: the page copy and captions for a finished video (posts.ts)
+//     POST /api/jobs/:id/post/draft   Claude writes them    POST .../preview  desktop builds a preview link
+//     POST /api/jobs/:id/post/approve {start?}  admins: the desktop puts the page live and schedules the posts
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
@@ -32,6 +35,7 @@
 //     GET  /api/desktop/uploads/:id               a file staff uploaded for a build job
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
+//     POST /api/desktop/jobs/:id/finish           {message, result} -> a page or publish job is done (no video)
 //     POST /api/desktop/jobs/:id/upload/start     -> starts an R2 multipart upload
 //     PUT  /api/desktop/jobs/:id/upload/part?n=1  raw bytes of one part (5 MB minimum except the last)
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
@@ -40,6 +44,7 @@ import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
 import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
+import { approvePost, draftPost, getPost, previewPost, putPost, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
@@ -73,6 +78,8 @@ const ACTIVE: Status[] = ["claimed", "rendering", "uploading"];
 const STALE_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
+// Videos list only shows video jobs; page and publish jobs show on their video's page (posts.ts).
+const VIDEO_KINDS = "'render', 'build'";
 
 function bearer(req: Request) {
   const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(\S+)$/i);
@@ -180,8 +187,8 @@ async function listJobs(url: URL, env: Env, c: Caller) {
   const want = url.searchParams.get("brand");
   const brand = c.brand !== "*" ? c.brand : want && (BRANDS as readonly string[]).includes(want) ? want : null;
   const rows = brand
-    ? await env.DB.prepare("SELECT * FROM jobs WHERE brand = ? ORDER BY created_at DESC LIMIT ?").bind(brand, limit).all<JobRow>()
-    : await env.DB.prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?").bind(limit).all<JobRow>();
+    ? await env.DB.prepare(`SELECT * FROM jobs WHERE brand = ? AND kind IN (${VIDEO_KINDS}) ORDER BY created_at DESC LIMIT ?`).bind(brand, limit).all<JobRow>()
+    : await env.DB.prepare(`SELECT * FROM jobs WHERE kind IN (${VIDEO_KINDS}) ORDER BY created_at DESC LIMIT ?`).bind(limit).all<JobRow>();
   return json({ jobs: rows.results.map(publicJob) });
 }
 
@@ -309,6 +316,18 @@ async function fail(req: Request, env: Env, id: string) {
   return json(publicJob((await getJob(env, id))!));
 }
 
+/** A page or publish job (approve and post) is done: it has no video, just what the desktop reports. */
+async function finish(req: Request, env: Env, id: string) {
+  const j = await activeJob(env, id);
+  if (j.kind !== "page" && j.kind !== "publish") throw new HttpError(409, "Only page and publish jobs finish without a video");
+  const b = await body<{ message?: string; result?: Record<string, unknown> }>(req);
+  await taskFinished(env, j, b.result ?? {});
+  const t = now();
+  await env.DB.prepare("UPDATE jobs SET status = 'done', message = ?, progress = 1, heartbeat_at = ?, updated_at = ?, finished_at = ? WHERE id = ?")
+    .bind((b.message || "Done").slice(0, 500), t, t, t, id).run();
+  return json(publicJob((await getJob(env, id))!));
+}
+
 const outputKey = (j: JobRow) => `outputs/${j.brand}/${j.id}.mp4`;
 
 async function uploadStart(env: Env, id: string) {
@@ -363,11 +382,12 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
     const dl = p.match(/^\/api\/desktop\/uploads\/([0-9a-f-]{36})$/);
     if (m === "GET" && dl) return desktopDownload(env, dl[1]);
-    const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|upload\/start|upload\/part|upload\/complete)$/);
+    const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|finish|upload\/start|upload\/part|upload\/complete)$/);
     if (d) {
       const [, id, action] = d;
       if (m === "POST" && action === "heartbeat") return heartbeat(req, env, id);
       if (m === "POST" && action === "fail") return fail(req, env, id);
+      if (m === "POST" && action === "finish") return finish(req, env, id);
       if (m === "POST" && action === "upload/start") return uploadStart(env, id);
       if (m === "PUT" && action === "upload/part") return uploadPart(req, url, env, id);
       if (m === "POST" && action === "upload/complete") return uploadComplete(req, env, id);
@@ -415,6 +435,12 @@ async function route(req: Request, env: Env): Promise<Response> {
 
   if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
   if (p === "/api/jobs" && m === "GET") return listJobs(url, env, c);
+  const pm = p.match(/^\/api\/jobs\/([0-9a-f-]{36})\/post(?:\/(draft|preview|approve))?$/);
+  if (pm && !pm[2] && m === "GET") return getPost(env, c, pm[1]);
+  if (pm && !pm[2] && m === "PUT") return putPost(req, env, c, pm[1]);
+  if (pm && pm[2] === "draft" && m === "POST") return draftPost(env, c, pm[1]);
+  if (pm && pm[2] === "preview" && m === "POST") return previewPost(env, c, pm[1]);
+  if (pm && pm[2] === "approve" && m === "POST") return approvePost(req, env, c, pm[1]);
   const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video))?$/);
   if (s) {
     const [, id, action] = s;

@@ -58,7 +58,7 @@ export interface BuildSpec {
 /** Clips the presenter films for a format: the hook, one per beat, the payoff. */
 export const clipsOf = (f: FormatDef) => ["hook", ...f.beats.map((b) => b.id), "cta"];
 
-const str = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+export const str = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const URLISH = /^(https?:\/\/)?[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i;
 const UUID = /^[0-9a-f-]{36}$/;
 
@@ -148,10 +148,10 @@ export function campaignId(title: string, jobId: string) {
 
 // ---------- Draft it for me ----------
 
-const DRAFTS_PER_HOUR = 30;
-const MODEL = "claude-opus-5-5";
+export const DRAFTS_PER_HOUR = 30;
+export const MODEL = "claude-opus-5-5";
 
-const BRAND_NOTES: Record<string, string> = {
+export const BRAND_NOTES: Record<string, string> = {
   beegraphix: "BeeGraphix decorates custom company apparel (embroidery and screen printing) in Fredericktown, PA. Viewers are business owners and managers buying gear for their crew. Every video ends by sending people to pick favorites and get custom pricing with their logo.",
   rugbee: "Rugbee is a division of BeeGraphix (rugbee.co). Keep claims to what the person tells you about the products.",
 };
