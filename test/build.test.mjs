@@ -114,3 +114,24 @@ test("build jobs validate the spec and only use the brand's own uploads", async 
   assert.equal(c.data.kind, "build");
   await call("POST", `/api/desktop/jobs/${c.data.id}/fail`, T.worker, { message: "test" });
 });
+
+test("staff can see their own brand's photos, not footage or another brand's", async () => {
+  const photo = await upload(T.bgx, "photo", "image/png", Buffer.from("png-bytes"));
+  const clip = await upload(T.bgx, "footage", "video/mp4", Buffer.from("mp4-bytes"));
+  const r = await call("GET", `/api/uploads/${photo.id}/file`, T.bgx);
+  assert.equal(r.status, 200);
+  assert.equal(r.res.headers.get("content-type"), "image/png");
+  assert.equal(r.data.toString(), "png-bytes");
+  assert.equal((await call("GET", `/api/uploads/${photo.id}/file`, T.rugbee)).status, 404);
+  assert.equal((await call("GET", `/api/uploads/${clip.id}/file`, T.bgx)).status, 404);
+  assert.equal((await call("GET", `/api/uploads/${photo.id}/file`)).status, 401);
+});
+
+test("product lookup refuses addresses that aren't public web pages", async () => {
+  for (const url of ["not a url", "localhost:8787", "http://127.0.0.1/x", "ftp://example.com/x", "intranet"]) {
+    const r = await call("POST", "/api/lookup", T.bgx, { url });
+    assert.equal(r.status, 400, url);
+  }
+  assert.equal((await call("POST", "/api/lookup/image", T.bgx, { url: "http://10.0.0.1/a.jpg" })).status, 400);
+  assert.equal((await call("POST", "/api/lookup", null, { url: "https://example.com" })).status, 401);
+});

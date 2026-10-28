@@ -29,7 +29,7 @@ const EXT: Record<string, string> = {
   "video/mp4": "mp4", "video/quicktime": "mov", "video/x-m4v": "mp4", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
 };
 
-const publicUpload = (u: UploadRow) => ({ id: u.id, kind: u.kind, name: u.name, type: u.content_type, bytes: u.bytes, status: u.status });
+export const publicUpload = (u: UploadRow) => ({ id: u.id, kind: u.kind, name: u.name, type: u.content_type, bytes: u.bytes, status: u.status });
 
 export const extFor = (u: UploadRow) => EXT[u.content_type] ?? "bin";
 
@@ -105,4 +105,13 @@ export async function desktopDownload(env: Env, id: string) {
   const obj = await env.MEDIA.get(u.r2_key);
   if (!obj) throw new HttpError(404, "Upload file missing");
   return new Response(obj.body, { headers: { "content-type": u.content_type, "content-length": String(obj.size), "cache-control": "no-store" } });
+}
+
+/** GET /api/uploads/:id/file: lets staff see a product photo they (or a product link) added. Photos only. */
+export async function viewPhoto(env: Env, c: Caller, id: string) {
+  const u = await ownUpload(env, c, id);
+  if (u.kind !== "photo" || u.status !== "ready") throw new HttpError(404, "Photo not found");
+  const obj = await env.MEDIA.get(u.r2_key);
+  if (!obj) throw new HttpError(404, "Photo file missing");
+  return new Response(obj.body, { headers: { "content-type": u.content_type, "content-length": String(obj.size), "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" } });
 }
