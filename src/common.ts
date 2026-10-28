@@ -6,6 +6,9 @@ export interface Env {
   SUBMIT_TOKENS: string;
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_BASE_URL?: string; // tests only: a stand-in for the Claude API
+  SS_ACCOUNT?: string; // S&S Activewear account number, for style number lookups
+  SS_API_KEY?: string;
+  SS_BASE_URL?: string; // tests only: a stand-in for the S&S API
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

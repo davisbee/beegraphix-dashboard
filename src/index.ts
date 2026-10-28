@@ -13,6 +13,7 @@
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
 //     PUT  /api/uploads/:id/part?n=1  raw bytes of one piece      POST /api/uploads/:id/complete {parts}
 //     POST /api/lookup?brand=         {url} -> {name, style, photo} read from a product page
+//     POST /api/lookup/style?brand=   {style} -> {name, style, photo} from the supplier (S&S Activewear)
 //     POST /api/lookup/image?brand=   {url} -> {photo}: a photo dragged out of another web page
 //     GET  /api/uploads/:id/file      a product photo, to show it on the New video screen
 //     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
@@ -34,7 +35,7 @@
 
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
-import { lookupImage, lookupProduct } from "./lookup";
+import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, resetPassword, sameString, sessionUser, updateUser, type Caller,
@@ -394,6 +395,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (up && up[2] === "file" && m === "GET") return viewPhoto(env, c, up[1]);
   if (up && up[2] === "part" && m === "PUT") return uploadPiece(req, url, env, c, up[1]);
   if (up && up[2] === "complete" && m === "POST") return finishUpload(req, env, c, up[1]);
+  if (p === "/api/lookup/style" && m === "POST") return lookupStyle(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/lookup/image" && m === "POST") return lookupImage(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/lookup" && m === "POST") return lookupProduct(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/draft" && m === "POST") return draftScript(req, env, c, brandFor(c, url.searchParams.get("brand")));

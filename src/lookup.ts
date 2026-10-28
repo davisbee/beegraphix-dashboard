@@ -193,3 +193,69 @@ export async function lookupProduct(req: Request, env: Env, c: Caller, brand: st
   if (!info.name && !info.style && !photo) throw new HttpError(422, "Couldn't find product details on that page. Fill this product in by hand.");
   return json({ name: info.name, style: info.style, photo });
 }
+
+// "Fill from style number": asks the supplier's own product data service instead of reading a web page.
+// Supplier websites (SanMar, S&S, Carhartt, Company Casuals) refuse to be read automatically; their
+// customer APIs don't. S&S Activewear: Basic auth with account number + API key (secrets SS_ACCOUNT, SS_API_KEY).
+const SS_API = "https://api.ssactivewear.com/v2";
+const SS_IMAGES = "https://www.ssactivewear.com/";
+
+interface SsStyle { styleID: number; partNumber: string; brandName: string; styleName: string; title: string; styleImage?: string }
+
+const squash = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** The style that best matches what was typed: "5000", "Gildan 5000", "PC54" or an S&S part number. */
+export function pickStyle(styles: SsStyle[], typed: string) {
+  const want = squash(typed);
+  const words = typed.toUpperCase().split(/\s+/).filter(Boolean);
+  const code = squash(words[words.length - 1] ?? "");
+  const scored = styles.map((s) => {
+    let score = 0;
+    if (squash(`${s.brandName}${s.styleName}`) === want) score = 4;
+    else if (squash(s.styleName) === want || s.partNumber === typed.trim()) score = 3;
+    else if (squash(s.styleName) === code && words.length > 1 && squash(s.brandName).startsWith(squash(words[0]))) score = 4;
+    else if (squash(s.styleName) === code) score = 2;
+    return { s, score };
+  }).filter((x) => x.score > 0);
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.s ?? null;
+}
+
+async function ssSearch(env: Env, typed: string): Promise<SsStyle[]> {
+  const auth = `Basic ${btoa(`${env.SS_ACCOUNT}:${env.SS_API_KEY}`)}`;
+  let res: Response;
+  try {
+    res = await fetch(`${env.SS_BASE_URL ?? SS_API}/styles?search=${encodeURIComponent(typed)}`, {
+      headers: { authorization: auth, accept: "application/json" },
+      signal: AbortSignal.timeout(12_000),
+    });
+  } catch {
+    throw new HttpError(502, "S&S didn't answer. Try again in a minute.");
+  }
+  if (res.status === 401 || res.status === 403) throw new HttpError(503, "The S&S login isn't working. Ask Davis to check it.");
+  if (res.status === 404) return [];
+  if (!res.ok) throw new HttpError(502, "S&S didn't answer. Try again in a minute.");
+  const data = await res.json<unknown>();
+  return Array.isArray(data) ? (data as SsStyle[]) : [];
+}
+
+/** POST /api/lookup/style?brand= {style} -> {name, style, photo, from}. */
+export async function lookupStyle(req: Request, env: Env, c: Caller, brand: string) {
+  const b = await body<{ style?: string }>(req);
+  const typed = String(b.style ?? "").trim().slice(0, 60);
+  if (!typed) throw new HttpError(400, "Type a style number first");
+  if (!env.SS_ACCOUNT || !env.SS_API_KEY) throw new HttpError(503, "Style number lookup isn't set up yet. Fill this product in by hand.");
+  const hit = pickStyle(await ssSearch(env, typed), typed);
+  if (!hit) throw new HttpError(404, `Couldn't find style ${typed} at S&S. Check the number, or fill this product in by hand.`);
+
+  let photo = null;
+  if (hit.styleImage) {
+    const small = new URL(hit.styleImage, SS_IMAGES).toString();
+    for (const u of new Set([small.replace(/_f[sm](\.\w+)$/, "_fl$1"), small])) {
+      try { photo = await savePhoto(env, c, brand, u, hit.styleName || "product"); } catch (e) { console.error("style image", e); }
+      if (photo) break;
+    }
+  }
+  const name = decode(`${hit.brandName} ${hit.styleName} ${hit.title}`).replace(/\s+/g, " ").trim().slice(0, 120);
+  return json({ name, style: hit.styleName.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, from: "S&S Activewear" });
+}
