@@ -140,6 +140,30 @@ async function fetchCapped(url: string, accept: string, max: number) {
   return { res, bytes };
 }
 
+/**
+ * The readable words on a page (title, description, then the body text without menus, scripts or styles), for
+ * "Draft it for me" to write from. null when the page can't be opened.
+ */
+export async function pageText(raw: string, max: number): Promise<string | null> {
+  let url: URL;
+  try { url = checkUrl(raw); } catch { return null; }
+  let page;
+  try { page = await fetchCapped(url.toString(), "text/html,application/xhtml+xml", MAX_PAGE); } catch { return null; }
+  if (!page) return null;
+  const html = new TextDecoder().decode(page.bytes);
+  const title = decode(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "");
+  const desc = meta(html, "og:description") || meta(html, "description");
+  const body = decode(
+    (html.match(/<body[^>]*>([\s\S]*)<\/body>/i)?.[1] ?? html)
+      .replace(/<(script|style|noscript|svg|template|iframe|nav|header|footer|form)\b[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<\/(p|div|section|h[1-6]|li|tr|br)>|<br\s*\/?>/gi, " . ")
+      .replace(/<[^>]+>/g, " "),
+  ).replace(/(\s*\.\s*){2,}/g, ". ").replace(/^[\s.]+/, "");
+  const text = [title && `Title: ${title}`, desc && `Description: ${decode(desc)}`, body].filter(Boolean).join("\n");
+  return text.length > 40 ? text.slice(0, max) : null;
+}
+
 /** What the file really is: image servers often say "image/jpg" or "application/octet-stream". */
 function imageType(b: Uint8Array, header: string) {
   if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
