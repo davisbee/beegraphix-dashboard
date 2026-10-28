@@ -104,7 +104,7 @@ function shell(page, inner) {
   app.innerHTML = `
     <header class="topbar"><div class="topbar-in">
       <a href="#/videos" class="home" aria-label="Content Factory, Videos"><img class="logo" src="${BRAND_INFO[state.brand].logo}" alt="${esc(brandName(state.brand))}"><span class="appname">Content Factory</span></a>
-      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}${id === "new" ? "?fresh" : ""}" ${page === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav>
+      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}${id === "new" ? "?fresh" : ""}" ${page === id ? 'aria-current="page"' : ""}>${label}${id === "team" && state.resetRequests ? ` <span class="count" title="Waiting on a new password">${state.resetRequests}</span>` : ""}</a>`).join("")}</nav>
       <div class="who">${brandPick}<span>${esc(state.me.name)}</span><button class="linkbtn" id="signout">Sign out</button></div>
     </div></header>
     <main>${inner}</main>`;
@@ -134,9 +134,10 @@ function showLogin(message) {
       <div class="field"><label for="email">Email</label><input type="email" id="email" autocomplete="username" required></div>
       <div class="field"><label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required></div>
       <button class="btn" type="submit">Sign In</button>
-      <p class="muted small" style="margin:16px 0 0">Forgot your password? Ask your admin to reset it.</p>
+      <p class="small" style="margin:16px 0 0"><a href="#" id="forgot">Forgot your password?</a></p>
     </form></div></div>`;
   $("#email").focus();
+  $("#forgot").onclick = (e) => { e.preventDefault(); showForgot($("#email").value); };
   $("#loginForm").onsubmit = async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector("button");
@@ -144,6 +145,40 @@ function showLogin(message) {
     try {
       await api("POST", "/api/login", { email: $("#email").value, password: $("#password").value });
       await start();
+    } catch (err) {
+      $("#err").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      btn.disabled = false;
+    }
+  };
+}
+
+// "Forgot your password?": there's no email sending yet, so the request goes to the admins' Team page instead.
+function showForgot(email = "") {
+  const b = document.body.dataset.brand;
+  app.innerHTML = `
+    <div class="login"><div class="login-in">
+      <img class="logo" src="${BRAND_INFO[b].logo}" alt="${esc(BRAND_INFO[b].name)}">
+      <div class="appname">Content Factory</div>
+      <form class="card" id="forgotForm" novalidate>
+      <h1>Reset your password</h1>
+      <p class="muted small" style="margin:0 0 20px">Enter the email you sign in with. Your admin gets the request and sends you a new temporary password.</p>
+      <div id="err"></div>
+      <div class="field"><label for="email">Email</label><input type="email" id="email" autocomplete="username" required value="${esc(email)}"></div>
+      <button class="btn" type="submit">Ask for a New Password</button>
+      <p class="small" style="margin:16px 0 0"><a href="#" id="back">Back to sign in</a></p>
+    </form></div></div>`;
+  $("#email").focus();
+  $("#back").onclick = (e) => { e.preventDefault(); showLogin(); };
+  $("#forgotForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button");
+    btn.disabled = true;
+    try {
+      await api("POST", "/api/password-help", { email: $("#email").value });
+      $("#forgotForm").innerHTML = `<h1>Request sent</h1>
+        <p class="muted" style="margin:0 0 20px">If that email has an account, your admin will see your request and send you a new temporary password. You'll pick your own when you sign in with it.</p>
+        <button class="btn" type="button" id="back2">Back to Sign In</button>`;
+      $("#back2").onclick = () => showLogin();
     } catch (err) {
       $("#err").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       btn.disabled = false;
@@ -932,6 +967,7 @@ async function pageTeam() {
   const canAll = state.me.brand === "*";
   shell("team", `${header(canAll ? "All brands" : brandName(state.me.brand), "Team", "Who can sign in. New people get a temporary password and pick their own the first time they sign in.")}
     <div id="shown"></div>
+    <div id="asks"></div>
     <div class="card"><h2>Add a person</h2><p class="muted small" style="margin:0 0 16px">They'll only see their own brand's videos.</p>
       <form id="addForm"><div id="err"></div>
         <div class="grid2">
@@ -952,9 +988,18 @@ async function pageTeam() {
 
   const load = async () => {
     const { users } = await api("GET", "/api/users");
+    // People who pressed "Forgot your password?" on the sign-in page.
+    const asks = users.filter((u) => u.resetRequestedAt && !u.disabled);
+    state.resetRequests = asks.length;
+    $(".nav .count")?.remove();
+    if (asks.length) $('.nav a[href="#/team"]')?.insertAdjacentHTML("beforeend", ` <span class="count">${asks.length}</span>`);
+    $("#asks").innerHTML = asks.length ? `<div class="card"><h2>Asking for a new password</h2>
+      <p class="muted small" style="margin:0 0 12px">They pressed “Forgot your password?” on the sign-in page. Reset it, then send them the temporary password yourself.</p>
+      <div class="drafts">${asks.map((u) => `<div class="draft" data-id="${u.id}"><b>${esc(u.name)}</b><span class="small muted">${esc(u.email)} · asked ${esc(ago(u.resetRequestedAt))}</span>
+        <span class="row"><button class="btn small" type="button" data-act="reset">Reset Password</button></span></div>`).join("")}</div></div>` : "";
     $("#people").innerHTML = `<table><thead><tr><th>Name</th><th>Email</th>${canAll ? "<th>Brand</th>" : ""}<th>Role</th><th>Last sign in</th><th></th></tr></thead><tbody>
       ${users.map((u) => `<tr class="${u.disabled ? "off" : ""}" data-id="${u.id}">
-        <td>${esc(u.name)}${u.id === state.me.id ? ' <span class="tag">You</span>' : ""}${u.disabled ? ' <span class="tag">Turned off</span>' : ""}</td>
+        <td>${esc(u.name)}${u.id === state.me.id ? ' <span class="tag">You</span>' : ""}${u.disabled ? ' <span class="tag">Turned off</span>' : ""}${u.resetRequestedAt && !u.disabled ? ' <span class="tag">Wants a new password</span>' : ""}</td>
         <td>${esc(u.email)}</td>${canAll ? `<td>${esc(brandName(u.brand))}</td>` : ""}
         <td>${u.role === "admin" ? "Admin" : "Staff"}</td>
         <td class="small">${u.lastLoginAt ? esc(ago(u.lastLoginAt)) : u.mustChange ? "Not yet" : ""}</td>
@@ -963,9 +1008,9 @@ async function pageTeam() {
           <button class="btn outline small" data-act="role">${u.role === "admin" ? "Make Staff" : "Make Admin"}</button>
           <button class="btn outline small" data-act="toggle">${u.disabled ? "Turn On" : "Turn Off"}</button>`}</div></td>
       </tr>`).join("")}</tbody></table>`;
-    $("#people").querySelectorAll("button[data-act]").forEach((btn) => {
+    document.querySelectorAll("#people button[data-act], #asks button[data-act]").forEach((btn) => {
       btn.onclick = async () => {
-        const id = btn.closest("tr").dataset.id;
+        const id = btn.closest("[data-id]").dataset.id;
         const u = users.find((x) => x.id === id);
         try {
           if (btn.dataset.act === "reset") {
@@ -1051,6 +1096,7 @@ async function start() {
     const r = await api("GET", "/api/me");
     state.me = r.user;
     state.brands = r.brands;
+    state.resetRequests = r.resetRequests ?? 0;
     const saved = recall("brand");
     state.brand = state.brands.includes(saved) ? saved : state.brands[0];
     store("brand", state.brand);
