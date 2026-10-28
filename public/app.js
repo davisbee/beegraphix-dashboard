@@ -330,6 +330,11 @@ async function pageNew() {
   if (!v || !Array.isArray(v.products) || v.products.length !== 5) v = blankVideo();
   const f = state.formats.find((x) => x.id === v.template) ?? state.formats[0];
   v.template = f.id;
+  // A program open with shirts still in its boxes (saved before programs kept their own): put the shirts back with the products.
+  if (!f.products.style && v.products.some((p) => p.style || p.colors?.length)) {
+    v.shelf = { ...(v.shelf || {}), products: v.products };
+    v.products = blankVideo().products;
+  }
   const N = f.products.count;
   const prods = v.products.slice(0, N); // the state always keeps 5, so switching formats loses nothing
   for (const b of f.beats) v.beats[b.id] = { script: "", text: "", ...(v.beats[b.id] || {}) };
@@ -363,8 +368,8 @@ async function pageNew() {
     </div>
 
     <div class="card"><div class="step">3</div><h2>${esc(f.products.title)}</h2><p class="muted small" style="margin:0 0 16px">${esc(f.products.hint)}</p>
-      ${prods.map((_, i) => `<div class="product" data-i="${i}">
-        <div class="pnum">${esc(f.products.labels[i])}</div>
+      ${prods.map((_, i) => `<div class="product${N === 1 ? " solo" : f.products.labels[i].length > 3 ? " flat" : ""}" data-i="${i}">
+        ${N === 1 ? "" : `<div class="pnum">${esc(f.products.labels[i])}</div>`}
         <div class="pgrid">
           <div class="field wide"><label for="pl${i}">Link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="${esc(f.products.linkHint)}"><div class="hint" data-linkstate="${i}"></div></div>
           <div class="field${f.products.style ? "" : " wide"}"><label for="pn${i}">${esc(f.products.nameLabel)}</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
@@ -448,7 +453,16 @@ async function pageNew() {
     if (el.dataset.k) set(el.dataset.k, el.type === "checkbox" ? el.checked : el.value);
     else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
     else if (el.name === "winner") v.winner = Number(el.value);
-    else if (el.name === "template") { v.template = el.value; save(); return pageNew(); } // redraw for the new format
+    else if (el.name === "template") {
+      // Products and programs (FAN Fundraiser, stores) don't mix: each keeps its own boxes, so switching never carries a shirt into a program.
+      const kindOf = (id) => (state.formats.find((x) => x.id === id)?.products.style === false ? "programs" : "products");
+      const was = kindOf(v.template), now = kindOf(el.value);
+      if (was !== now) {
+        v.shelf = { ...(v.shelf || {}), [was]: v.products };
+        v.products = v.shelf[now]?.length === 5 ? v.shelf[now] : blankVideo().products;
+      }
+      v.template = el.value; save(); return pageNew(); // redraw for the new format
+    }
     else return;
     if (el.dataset.k?.endsWith(".name")) names();
     save();
@@ -551,7 +565,7 @@ async function pageNew() {
   const showColors = (i) => {
     const p = v.products[i];
     const box = form.querySelector(`[data-colors="${i}"]`);
-    box.hidden = !p.colors?.length;
+    box.hidden = !f.products.style || !p.colors?.length;
     if (box.hidden) return;
     box.innerHTML = `<label class="small muted" for="pc${i}">Color in the video</label><select id="pc${i}" data-colorpick><option value="">Pick a color (${p.colors.length})</option>${p.colors.map((c, n) =>
       `<option value="${n}"${c.name === p.color ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select><span class="small muted" data-colorstate></span>`;

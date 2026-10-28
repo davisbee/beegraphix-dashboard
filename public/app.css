@@ -159,6 +159,8 @@ tr.off td { color: var(--ink-muted); }
 .choice.off:hover { border-color: var(--line); }
 .product { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
 .pnum { font: 700 22px/44px var(--font); color: var(--ink-muted); }
+.product.solo, .product.flat { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.product.flat .pnum { font-size: 16px; line-height: 24px; }
 .pgrid { display: grid; grid-template-columns: 2fr 1fr; gap: 0 16px; }
 .pgrid .wide { grid-column: 1 / -1; }
 .pgrid .field { margin-bottom: 12px; }
