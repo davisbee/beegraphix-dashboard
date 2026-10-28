@@ -338,6 +338,16 @@ async function showPosting(j) {
   if (busy) { stopTimer(); state.timer = setTimeout(() => { if ($("#postCard")) again(); }, 5000); }
 }
 
+// The whole script as plain text, one part per paragraph, for a phone teleprompter app.
+const teleprompter = (parts) => parts.map((x) => String(x ?? "").trim()).filter(Boolean).join("\n\n");
+const scriptOfSpec = (sp) => teleprompter([sp.hook, ...(Array.isArray(sp.beats) ? sp.beats.map((b) => b.script) : (sp.products || []).map((p) => p.script)), sp.cta]);
+async function copyScript(btn, text) {
+  const was = btn.textContent;
+  try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+  catch { prompt("Copy the script:", text); }
+  setTimeout(() => { btn.textContent = was; }, 2000);
+}
+
 async function pageVideo(id) {
   shell("videos", `<div id="detail"><div class="card empty">Loading…</div></div>`);
   await loadCatalog().catch(() => {});
@@ -353,6 +363,7 @@ async function pageVideo(id) {
       : `<div class="wait">${j.status === "failed" ? "This one didn't finish." : j.status === "cancelled" ? "Cancelled." : `${esc(label)}${j.progress != null && j.status === "rendering" ? ` ${Math.round(j.progress * 100)}%` : ""}…<br><span class="small">${esc(j.message ?? "")}</span>`}</div>`;
     const actions = [
       j.hasVideo ? `<a class="btn" href="/api/jobs/${j.id}/video?download">Download</a>` : "",
+      j.payload.spec ? `<button class="btn outline" type="button" id="copyScript">Copy Script</button>` : "",
       j.status === "queued" ? `<button class="btn outline" id="cancel">Cancel</button>` : "",
       ["done", "failed", "cancelled"].includes(j.status) ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
     ].join("");
@@ -386,6 +397,8 @@ async function pageVideo(id) {
       $("#player", box).appendChild(keep);
     } else box.innerHTML = html;
     const cancel = $("#cancel");
+    const cs = $("#copyScript");
+    if (cs) cs.onclick = () => copyScript(cs, scriptOfSpec(j.payload.spec));
     if (cancel) cancel.onclick = async () => { cancel.disabled = true; await api("POST", `/api/jobs/${j.id}/cancel`).catch((e) => alert(e.message)); refresh(); };
     if ($("#posting")) showPosting(j).catch((e) => { const b = $("#posting"); if (b) b.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="bad">${esc(e.message)}</p></div>`; });
     stopTimer();
@@ -611,6 +624,7 @@ async function pageNew(params = new URLSearchParams()) {
       </div>
       <h3 class="sub">Footage</h3>
       <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each part of the middle, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
+      <div class="row" style="margin:0 0 14px"><button class="btn outline small" type="button" id="copyScriptNv">Copy Script for Teleprompter</button></div>
       <label class="check" style="margin-bottom:14px"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
       <div class="slots">${clips.map((c) => slot(`clip-${c}`, clipLabel(c), "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
     </div>
@@ -625,6 +639,11 @@ async function pageNew(params = new URLSearchParams()) {
   </form>`);
 
   const form = $("#nv");
+  $("#copyScriptNv").onclick = (e) => {
+    const text = teleprompter([v.hook, ...f.beats.map((b) => (b.kind === "product" ? prods[b.product]?.script : v.beats[b.id]?.script)), v.cta]);
+    if (!text) return alert("Write the script first, or use Draft It For Me.");
+    copyScript(e.currentTarget, text);
+  };
   const get = (path) => path.split(".").reduce((o, k) => o?.[k], v);
   const set = (path, val) => {
     const ks = path.split(".");
