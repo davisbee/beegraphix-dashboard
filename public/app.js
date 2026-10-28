@@ -236,7 +236,11 @@ async function showPosting(j) {
       <h3 class="sub">Captions</h3><p class="muted small" style="margin:0 0 10px">Leave one empty to skip that site. <b>{url}</b> becomes the link to ${d.program ? "the program page" : "the page"}, tagged so you can see which post a quote came from.</p>
       ${CAPTION_BOXES.map(([k, l]) => field(`captions.${k}`, l, k === "youtubeTitle" ? "input" : "textarea", copy.captions[k])).join("")}
       <div class="field" style="max-width:240px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
-      ${p?.previewUrl && !live ? `<div class="notice">Preview ready: <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">open the page</a>. Check it on your phone too.</div>` : ""}
+      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Each post as it'll go to HighLevel, with the finished video. This updates as you type.</p>
+      <div class="feed" id="feed"></div>
+      ${d.program ? "" : p?.previewUrl ? `<h3 class="sub">The page</h3><p class="muted small" style="margin:0 0 10px">The preview as a phone sees it. <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">Open it full size</a>.${live ? "" : " Press Build Preview again after changing the page wording."}</p>
+        <div class="phone"><iframe src="${esc(p.previewUrl)}" title="Page preview" loading="lazy"></iframe></div>`
+        : `<p class="muted small">Press <b>Build Preview</b> to see the page here too.</p>`}
       ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button>${d.program ? "" : `<button class="btn outline" type="button" id="postPreview">Build Preview</button>`}${d.canApprove
         ? `<button class="btn" type="button" id="postApprove">Approve and Post</button>` : `<span class="small muted">An admin approves and posts.</span>`}</div>
         <p class="small muted" id="postState" style="margin:10px 0 0"></p>`}`}
@@ -251,6 +255,24 @@ async function showPosting(j) {
     });
     return out;
   };
+  // The posts as ghl-social.mjs sends them: one per site with a caption, all on the start day at 11:30.
+  const feed = () => {
+    const el = $("#feed");
+    if (!el) return;
+    const v = values(), c = v.copy.captions;
+    const url = d.program ? link : `https://blog.beegraphix.com/${v.slug || "…"}`;
+    const day = v.start ? new Date(`${v.start}T11:30:00`).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    const sites = [["instagram", "Instagram reel"], ["facebook", "Facebook reel"], ["tiktok", "TikTok"], ["youtube", "YouTube Short"], ["linkedin", "LinkedIn"]].filter(([k]) => (c[k] ?? "").trim());
+    el.innerHTML = sites.length ? sites.map(([k, name]) => `<div class="post">
+        <div class="posthead"><b>${name}</b><span class="muted small">${esc(day)}</span></div>
+        <video controls playsinline muted preload="metadata" src="/api/jobs/${j.id}/video#t=0.5"></video>
+        ${k === "youtube" ? `<div class="posttitle">${esc(c.youtubeTitle || jobTitle(j).title)}</div>` : ""}
+        <div class="postcap">${esc(c[k].replaceAll("{url}", url)).replace(/(https:\/\/[^\s<]+)/g, '<span class="link">$1</span>')}</div>
+      </div>`).join("") : `<p class="muted small">No captions yet, so nothing would be posted.</p>`;
+  };
+  feed();
+  let typing;
+  box.querySelectorAll("[data-pk]").forEach((x) => x.addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(feed, 300); }));
   const saveIt = () => api("PUT", `/api/jobs/${j.id}/post`, values());
   const again = () => showPosting(j).catch(err);
   // fn returns false when the person backed out of a confirm.
