@@ -239,7 +239,31 @@ async function ssSearch(env: Env, typed: string): Promise<SsStyle[]> {
   return Array.isArray(data) ? (data as SsStyle[]) : [];
 }
 
-interface Found { name: string; style: string; images: string[]; from: string; exact: boolean }
+interface Color { name: string; image: string; swatch: string }
+interface Found { name: string; style: string; images: string[]; from: string; exact: boolean; colors: () => Promise<Color[]> }
+
+const MAX_COLORS = 80;
+/** One entry per color name, in the supplier's order. */
+function uniqueColors(list: Color[]) {
+  const seen = new Set<string>();
+  return list.filter((c) => c.name && c.image && !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase())).slice(0, MAX_COLORS);
+}
+
+async function ssColors(env: Env, hit: SsStyle): Promise<Color[]> {
+  const res = await fetch(`${env.SS_BASE_URL ?? SS_API}/products/?style=${encodeURIComponent(`${hit.brandName} ${hit.styleName}`)}&fields=colorName,colorFrontImage,colorSwatchImage`, {
+    headers: { authorization: `Basic ${btoa(`${env.SS_ACCOUNT}:${env.SS_API_KEY}`)}`, accept: "application/json" },
+    signal: AbortSignal.timeout(12_000),
+  });
+  if (!res.ok) return [];
+  const data = await res.json<unknown>();
+  if (!Array.isArray(data)) return [];
+  const abs = (u?: string) => (u ? new URL(u, SS_IMAGES).toString() : "");
+  return uniqueColors((data as { colorName?: string; colorFrontImage?: string; colorSwatchImage?: string }[]).map((p) => ({
+    name: decode(p.colorName ?? ""),
+    image: abs(p.colorFrontImage).replace(/_f[sm](\.\w+)$/, "_fl$1"),
+    swatch: abs(p.colorSwatchImage),
+  })));
+}
 
 async function fromSs(env: Env, typed: string): Promise<Found | null> {
   const hit = pickStyle(await ssSearch(env, typed), typed);
@@ -250,12 +274,12 @@ async function fromSs(env: Env, typed: string): Promise<Found | null> {
     images.push(small.replace(/_f[sm](\.\w+)$/, "_fl$1"), small);
   }
   const exact = squash(hit.styleName) === squash(typed) || squash(`${hit.brandName}${hit.styleName}`) === squash(typed) || hit.partNumber === typed.trim();
-  return { name: `${hit.brandName} ${hit.styleName} ${hit.title}`, style: hit.styleName, images, from: "S&S Activewear", exact };
+  return { name: `${hit.brandName} ${hit.styleName} ${hit.title}`, style: hit.styleName, images, from: "S&S Activewear", exact, colors: () => ssColors(env, hit) };
 }
 
 // SanMar Web Services (SOAP): customer number + sanmar.com login (secrets SANMAR_CUSTOMER, SANMAR_USER,
-// SANMAR_PASSWORD). The answer lists every color and size of the style (megabytes for a tee), so it reads
-// only until the first item is complete.
+// SANMAR_PASSWORD). The answer lists every color and size of the style (megabytes for a tee); the first
+// item gives the name and photo, and the rest give the color choices.
 const SANMAR_API = "https://ws.sanmar.com:8080/SanMarWebService/SanMarProductInfoServicePort";
 const xmlEscape = (s: string) => s.replace(/[<>&'"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const tag = (xml: string, name: string) => decode(xml.match(new RegExp(`<(?:\\w+:)?${name}>([^<]*)</(?:\\w+:)?${name}>`))?.[1] ?? "").trim();
@@ -290,7 +314,7 @@ async function fromSanmar(env: Env, typed: string): Promise<Found | null> {
     throw new HttpError(502, "SanMar didn't answer. Try again in a minute.");
   }
   if (!res.body) throw new HttpError(502, "SanMar didn't answer. Try again in a minute.");
-  const xml = await readUntil(res, /<\/(?:\w+:)?listResponse>|<\/(?:\w+:)?Envelope>/, 1024 * 1024);
+  const xml = await readUntil(res, /<\/(?:\w+:)?Envelope>/, 12 * 1024 * 1024);
   const message = tag(xml, "message");
   if (tag(xml, "errorOccured") === "true" || !res.ok) {
     if (/authentication/i.test(message)) throw new HttpError(503, "The SanMar login isn't working. Ask Davis to check it.");
@@ -302,11 +326,18 @@ async function fromSanmar(env: Env, typed: string): Promise<Found | null> {
   const found = tag(item, "style") || style;
   // "Port & Co Core Cotton Tee. PC54": the title ends with the style.
   const title = tag(item, "productTitle").replace(new RegExp(`[.\\s-]*${found.replace(/[^A-Za-z0-9-]/g, "")}\\s*$`, "i"), "");
-  const images = ["productImage", "frontModel", "colorProductImage", "frontFlat"].map((n) => tag(item, n)).filter((u) => /^https?:\/\//.test(u));
-  return { name: `${title || tag(item, "brandName")} ${found}`, style: found, images, from: "SanMar", exact: true };
+  // productImage is a small catalog shot; the flat and model photos are full size.
+  const images = ["frontFlat", "frontModel", "colorProductImage", "productImage"].map((n) => tag(item, n)).filter((u) => /^https?:\/\//.test(u));
+  const items = xml.match(/<(?:\w+:)?listResponse>[\s\S]*?<\/(?:\w+:)?listResponse>/g) ?? [];
+  const colors = uniqueColors(items.map((it) => ({
+    name: tag(it, "color"),
+    image: ["frontFlat", "frontModel", "colorProductImage"].map((n) => tag(it, n)).find((u) => /^https?:\/\//.test(u)) ?? "",
+    swatch: tag(it, "colorSwatchImage"),
+  })));
+  return { name: title || tag(item, "brandName"), style: found, images, from: "SanMar", exact: true, colors: async () => colors };
 }
 
-/** POST /api/lookup/style?brand= {style} -> {name, style, photo, from}: asks S&S and SanMar together. */
+/** POST /api/lookup/style?brand= {style} -> {name, style, photo, colors, from}: asks S&S and SanMar together. */
 export async function lookupStyle(req: Request, env: Env, c: Caller, brand: string) {
   const b = await body<{ style?: string }>(req);
   const typed = String(b.style ?? "").trim().slice(0, 60);
@@ -331,6 +362,8 @@ export async function lookupStyle(req: Request, env: Env, c: Caller, brand: stri
     try { photo = await savePhoto(env, c, brand, u, hit.style || "product"); } catch (e) { console.error("style image", e); }
     if (photo) break;
   }
+  let colors: Color[] = [];
+  try { colors = await hit.colors(); } catch (e) { console.error("style colors", e); }
   const name = decode(hit.name).replace(/\s+/g, " ").trim().slice(0, 120);
-  return json({ name, style: hit.style.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, from: hit.from });
+  return json({ name, style: hit.style.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, colors, from: hit.from });
 }
