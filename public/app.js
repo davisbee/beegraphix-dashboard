@@ -361,7 +361,7 @@ async function pageNew() {
           <div class="field wide"><label for="pl${i}">Product link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="Paste the product page, e.g. https://beegraphix.com/…"><div class="hint" data-linkstate="${i}"></div></div>
           <div class="field"><label for="pn${i}">Product name</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
           <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" data-stylebox="${i}" placeholder="e.g. 5000 or Gildan 5000"></div>
-          <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}</div>
+          <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}<div class="colors" data-colors="${i}" hidden></div></div>
         </div></div>`).join("")}
     </div>
 
@@ -520,12 +520,39 @@ async function pageNew() {
       save();
       fill();
       slotUi[`photo${i}`].show();
+      if (r.colors?.length) { p.colors = r.colors; p.color = ""; save(); showColors(i); }
       out.textContent = got.length ? `Filled in the ${got.join(", ").replace(/, ([^,]*)$/, " and $1")} from ${r.from || where}. Check them.` : `Nothing new from ${r.from || where}; what's here stays.`;
     } catch (err) {
       out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
       lookedUp.delete(key);
     } finally { busy.delete(`link${i}`); }
   };
+  // Color choices from a style lookup: picking one swaps the photo to that color.
+  const showColors = (i) => {
+    const p = v.products[i];
+    const box = form.querySelector(`[data-colors="${i}"]`);
+    box.hidden = !p.colors?.length;
+    if (box.hidden) return;
+    box.innerHTML = `<div class="small muted">Color in the video: <b data-colorname>${esc(p.color || "pick one")}</b></div><div class="swatches">${p.colors.map((c, n) =>
+      `<button type="button" class="swatch${c.name === p.color ? " on" : ""}" data-color="${n}" title="${esc(c.name)}" aria-label="${esc(c.name)}">${c.swatch ? `<img src="${esc(c.swatch)}" alt="" loading="lazy">` : esc(c.name.slice(0, 3))}</button>`).join("")}</div>`;
+    box.querySelectorAll("[data-color]").forEach((b) => b.onclick = async () => {
+      const c = p.colors[+b.dataset.color];
+      const label = $("[data-colorname]", box);
+      label.textContent = `Getting ${c.name}…`;
+      busy.add(`color${i}`);
+      try {
+        const r = await api("POST", `/api/lookup/image?brand=${state.brand}`, { url: c.image });
+        p.photo = r.photo.id;
+        p.photoName = `${p.style || "photo"} ${c.name}`;
+        p.color = c.name;
+        p.auto = { ...(p.auto || {}), photo: p.photo };
+        save();
+        slotUi[`photo${i}`].show();
+        showColors(i);
+      } catch (err) { label.innerHTML = `<span class="bad">${esc(err.message)}</span>`; } finally { busy.delete(`color${i}`); }
+    });
+  };
+  v.products.forEach((_, i) => showColors(i));
   const lookup = (i) => {
     const p = v.products[i];
     const auto = p.auto || {};
