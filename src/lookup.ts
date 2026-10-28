@@ -82,7 +82,10 @@ export function readProductPage(html: string, pageUrl: string) {
   let name = decode(String(p?.name ?? ""));
   // Page titles carry the store's name: "Duck Vest | BeeGraphix" -> "Duck Vest"
   if (!name) name = (meta(html, "og:title") || title).split(/\s[|–—]\s|\s-\s(?=[^-]*$)/)[0].trim();
-  const fromData = [p?.sku, p?.mpn, p?.productGroupID, meta(html, "product:retailer_item_id")].map((x) => String(x ?? "").trim()).find((x) => x && x.length <= 20);
+  // SanMar's catalogs (Company Casuals, sanmar.com) put it in their own page data instead.
+  const sanmar = html.match(/"productStyleNumber"\s*:\s*"([^"]{2,20})"/)?.[1] ?? html.match(/data-style-number=["']([^"']{2,20})["']/i)?.[1]
+    ?? html.match(/class=["'][^"']*product-style-number[^"']*["'][^>]*>\s*([A-Z0-9-]{2,20})/i)?.[1];
+  const fromData = [p?.sku, p?.mpn, p?.productGroupID, meta(html, "product:retailer_item_id"), sanmar].map((x) => String(x ?? "").trim()).find((x) => x && x.length <= 20);
   let path = "";
   try { const u = new URL(pageUrl); path = decodeURIComponent(u.pathname + " " + u.search).toUpperCase(); } catch { /* keep empty */ }
   const style = (fromData || name.toUpperCase().match(STYLE)?.[1] || path.replace(/[^A-Z0-9]+/g, " ").match(URL_STYLE)?.[1] || "").toUpperCase();
@@ -95,7 +98,10 @@ export function readProductPage(html: string, pageUrl: string) {
   let imageFallback = "";
   try {
     if (image) {
-      imageFallback = new URL(decode(image), pageUrl).toString();
+      const u = new URL(decode(image), pageUrl);
+      // Company Casuals glues its own host onto a CDN address: "https://site:443//cdnp.sanmar.com/...".
+      const glued = u.pathname.match(/^\/\/([a-z0-9.-]+\.[a-z]{2,})(\/.*)$/i);
+      imageFallback = glued ? `https://${glued[1]}${glued[2]}${u.search}` : u.toString();
       imageUrl = biggerPhoto(new URL(imageFallback)).toString();
     }
   } catch { /* bad URL */ }
