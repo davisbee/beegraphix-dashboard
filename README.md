@@ -16,9 +16,10 @@ It runs on Cloudflare. The video building itself stays on AI-DESKTOP, in the
 1. **Brand kits.** Done in the Content Factory (`brands/beegraphix`, `brands/rugbee`).
 2. **Job queue and desktop worker.** Done. Jobs can also be submitted by hand with `npm run job` in the
    Content Factory.
-3. **The dashboard screens.** Part 1 is in: sign in, the Team page, the Videos list and video page, and
-   rendering any campaign that's on the desktop. Still to come: the New video screen (goal, presenter,
-   template, script box with "Draft it for me", uploads) and approve and post.
+3. **The dashboard screens.** In: sign in, the Team page, the Videos list and video page, rendering any
+   campaign that's on the desktop again, and the New video screen (goal, template and look, five
+   products with photos, a Hook / Middle / Payoff script with "Draft it for me", presenter footage).
+   Still to come: approve and post.
 4. HeyGen avatars.
 5. Rugbee goes live.
 
@@ -53,10 +54,14 @@ whose campaign is painted with a different brand kit.
 | | `GET /api/jobs`, `GET /api/jobs/:id` | status |
 | | `POST /api/jobs/:id/cancel` | cancel while still queued |
 | | `GET /api/jobs/:id/video` | the finished MP4 (seekable; `?download` saves it) |
+| | `POST /api/jobs` `{kind: "build", spec, draft?, brand?}` | New video: the desktop builds a campaign from the spec, then renders it |
+| | `POST /api/uploads?brand=` `{kind, name, type, size}`, `PUT /api/uploads/:id/part?n=`, `POST /api/uploads/:id/complete` | footage (MP4/MOV, 4 GB) and photos (JPG/PNG/WebP, 25 MB) from the browser, in 20 MB pieces |
+| | `POST /api/draft?brand=` | "Draft it for me": Claude writes the hook, five product lines and payoff (30 an hour per person) |
 | | `GET /api/catalog` | campaigns and versions on the desktop |
 | admins | `GET/POST /api/users`, `POST /api/users/:id`, `POST /api/users/:id/reset` | Team page |
 | desktop (`WORKER_TOKEN`) | `POST /api/desktop/claim` | take the oldest queued job (204 when none) |
 | | `PUT /api/desktop/catalog` | the campaigns on the PC (sent at start and every 10 minutes) |
+| | `GET /api/desktop/uploads/:id` | download footage or a photo for a build job |
 | | `POST /api/desktop/jobs/:id/heartbeat` | rendering/uploading progress |
 | | `POST /api/desktop/jobs/:id/fail` | report an error |
 | | `POST …/upload/start`, `PUT …/upload/part?n=`, `POST …/upload/complete` | send the video to R2 in parts |
@@ -72,6 +77,8 @@ and Secrets), never in git:
   `.env` as `DASHBOARD_WORKER_TOKEN`.
 - `SUBMIT_TOKENS`: JSON mapping each staff token to a brand, e.g.
   `{"<token>": "beegraphix", "<token>": "rugbee", "<token>": "*"}`. `*` sees every brand.
+- `ANTHROPIC_API_KEY` (optional): the Claude API key for "Draft it for me". Without it the button says
+  it isn't switched on yet and staff write the script themselves.
 
 ## Cloudflare resources
 

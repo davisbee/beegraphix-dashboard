@@ -1,0 +1,116 @@
+// New video: uploads, "Draft it for me" and build jobs. Same local dev server as api.test.mjs.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+const BASE = process.env.DASHBOARD_URL ?? "http://localhost:8787";
+const T = {
+  worker: "local-worker-token-0123456789abcdef",
+  admin: "local-admin-token-0123456789abcdef",
+  bgx: "local-bgx-token-0123456789abcdef",
+  rugbee: "local-rugbee-token-0123456789abcdef",
+};
+
+async function call(method, path, token, body, raw) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body && !raw ? { "content-type": "application/json" } : {}) },
+    body: raw ?? (body ? JSON.stringify(body) : undefined),
+  });
+  const buf = Buffer.from(await res.arrayBuffer());
+  let data = null;
+  try { data = JSON.parse(buf.toString()); } catch { data = buf; }
+  return { status: res.status, data, res };
+}
+
+async function upload(token, kind, type, bytes, brand = "") {
+  const s = await call("POST", `/api/uploads${brand ? `?brand=${brand}` : ""}`, token, { kind, name: `test.${type.split("/")[1]}`, type, size: bytes.length });
+  assert.equal(s.status, 201, JSON.stringify(s.data));
+  const parts = [];
+  for (let n = 1, off = 0; off < bytes.length; n++, off += s.data.partBytes) {
+    const p = await call("PUT", `/api/uploads/${s.data.upload.id}/part?n=${n}`, token, null, bytes.subarray(off, off + s.data.partBytes));
+    assert.equal(p.status, 200, JSON.stringify(p.data));
+    parts.push(p.data);
+  }
+  const c = await call("POST", `/api/uploads/${s.data.upload.id}/complete`, token, { parts });
+  assert.equal(c.status, 200, JSON.stringify(c.data));
+  assert.equal(c.data.upload.status, "ready");
+  return c.data.upload;
+}
+
+const spec = (over = {}) => ({
+  template: "top5", title: "Top 5 Test Picks", goal: "reach", audience: "crews", look: "creator",
+  presenter: { mode: "self", name: "Test Person", title: "" },
+  hook: "Stop buying the wrong gear.", hookText: "Stop buying the wrong gear", cta: "Hit the link below.", link: "beegraphix.com/test", greenScreen: false,
+  products: [1, 2, 3, 4, 5].map((i) => ({ name: `Product ${i}`, style: `ST${i}`, link: "", script: `Number ${i}, product ${i}.`, shortName: "", tag: "", photo: null })),
+  footage: {},
+  ...over,
+});
+
+async function drain() {
+  for (;;) {
+    const c = await call("POST", "/api/desktop/claim", T.worker);
+    if (c.status === 204) return;
+    await call("POST", `/api/desktop/jobs/${c.data.id}/fail`, T.worker, { message: "drained by test" });
+  }
+}
+
+test("uploads check the file type and size", async () => {
+  assert.equal((await call("POST", "/api/uploads", T.bgx, { kind: "footage", name: "a.exe", type: "application/x-msdownload", size: 10 })).status, 400);
+  assert.equal((await call("POST", "/api/uploads", T.bgx, { kind: "photo", name: "a.jpg", type: "image/jpeg", size: 26 * 1024 * 1024 })).status, 400);
+  assert.equal((await call("POST", "/api/uploads", T.bgx, { kind: "photo", name: "a.jpg", type: "image/jpeg", size: 0 })).status, 400);
+  assert.equal((await call("POST", "/api/uploads", T.admin, { kind: "photo", name: "a.jpg", type: "image/jpeg", size: 5 })).status, 400, "admin must name a brand");
+  assert.equal((await call("POST", "/api/uploads", null, { kind: "photo", name: "a.jpg", type: "image/jpeg", size: 5 })).status, 401);
+});
+
+test("a big video goes up in pieces and the desktop gets it back byte for byte", async () => {
+  const bytes = Buffer.alloc(21 * 1024 * 1024 + 123);
+  for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i % 251;
+  const up = await upload(T.bgx, "footage", "video/mp4", bytes);
+  assert.equal(up.bytes, bytes.length);
+  // Another brand can't touch it, and staff can't download through the desktop route.
+  assert.equal((await call("PUT", `/api/uploads/${up.id}/part?n=1`, T.rugbee, null, Buffer.from("x"))).status, 404);
+  assert.equal((await call("GET", `/api/desktop/uploads/${up.id}`, T.bgx)).status, 401);
+  const d = await call("GET", `/api/desktop/uploads/${up.id}`, T.worker);
+  assert.equal(d.status, 200);
+  assert.equal(d.res.headers.get("content-type"), "video/mp4");
+  assert.ok(Buffer.compare(d.data, bytes) === 0, "downloaded file matches");
+});
+
+test("Draft it for me says it's off until the Claude key is set", async () => {
+  const products = [1, 2, 3, 4, 5].map((i) => ({ name: `P${i}` }));
+  const r = await call("POST", "/api/draft", T.bgx, { goal: "reach", products });
+  assert.equal(r.status, 503);
+  assert.match(r.data.error, /switched on/);
+});
+
+test("build jobs validate the spec and only use the brand's own uploads", async () => {
+  await drain();
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ products: [] }) })).status, 400);
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ hook: "" }) })).status, 400);
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ goal: "viral" }) })).status, 400);
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ presenter: { mode: "heygen", name: "x" } }) })).status, 400);
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ link: "not a link" }) })).status, 400);
+
+  const rugPhoto = await upload(T.rugbee, "photo", "image/png", Buffer.from("png-bytes"));
+  const bgxPhoto = await upload(T.bgx, "photo", "image/jpeg", Buffer.from("jpg-bytes"));
+  const bgxClip = await upload(T.admin, "footage", "video/quicktime", Buffer.from("mov-bytes"), "beegraphix");
+  const withPhoto = (id) => spec({ products: spec().products.map((p, i) => (i === 0 ? { ...p, photo: id } : p)) });
+  const wrong = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: withPhoto(rugPhoto.id) });
+  assert.equal(wrong.status, 400, "another brand's photo");
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ footage: { hook: bgxPhoto.id } }) })).status, 400, "a photo isn't footage");
+
+  const ok = await call("POST", "/api/jobs", T.bgx, { kind: "build", draft: true, spec: { ...withPhoto(bgxPhoto.id), footage: { hook: bgxClip.id, p9: "ignored" } } });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  assert.equal(ok.data.kind, "build");
+  assert.equal(ok.data.brand, "beegraphix");
+  assert.match(ok.data.payload.campaign, /^top-5-test-picks-[0-9a-f]{6}$/);
+  assert.equal(ok.data.payload.variant, "creator");
+  assert.equal(ok.data.payload.title, "Top 5 Test Picks");
+  assert.deepEqual(ok.data.payload.spec.footage, { hook: bgxClip.id });
+  assert.equal(ok.data.payload.spec.products[0].photo, bgxPhoto.id);
+
+  const c = await call("POST", "/api/desktop/claim", T.worker);
+  assert.equal(c.data.id, ok.data.id);
+  assert.equal(c.data.kind, "build");
+  await call("POST", `/api/desktop/jobs/${c.data.id}/fail`, T.worker, { message: "test" });
+});
