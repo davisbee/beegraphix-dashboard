@@ -13,6 +13,9 @@ export interface Env {
   SANMAR_USER?: string;
   SANMAR_PASSWORD?: string;
   SANMAR_BASE_URL?: string; // tests only: a stand-in for SanMar
+  RESEND_API_KEY?: string; // Resend, for "Forgot your password?" emails. Without it the request goes to the Team page.
+  EMAIL_FROM?: string; // sender for those emails; default "Content Factory <noreply@shopbgx.com>"
+  RESEND_BASE_URL?: string; // tests only: a stand-in for Resend
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

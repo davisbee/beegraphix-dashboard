@@ -163,15 +163,86 @@ export async function logout(req: Request, env: Env) {
   return res;
 }
 
+const RESET_MS = 60 * 60 * 1000; // a reset link works for an hour
+const RESETS_PER_HOUR = 3;
+
 /**
- * "Forgot your password?": marks the person so their admin sees the request on the Team page. The answer is the same
- * whether or not the email has an account, so nobody can use it to find out who works here.
+ * "Forgot your password?": emails the person a one-time link to pick a new password. Without email set up (or if the
+ * email can't be sent) their admin sees the request on the Team page instead. The answer is the same whether or not
+ * the email has an account, so nobody can use it to find out who works here.
  */
 export async function requestPasswordHelp(req: Request, env: Env) {
   const b = await body<{ email?: string }>(req);
   const email = String(b.email ?? "").trim();
   if (!EMAIL.test(email) || email.length > 200) throw new HttpError(400, "Enter your email address");
-  await env.DB.prepare("UPDATE users SET reset_requested_at = ? WHERE email = ? AND disabled = 0").bind(now(), email).run();
+  const via = env.RESEND_API_KEY ? "email" : "admin";
+  const u = await env.DB.prepare("SELECT * FROM users WHERE email = ? AND disabled = 0").bind(email).first<UserRow>();
+  if (!u) return json({ ok: true, via });
+  const t = now();
+  const askAdmin = () => env.DB.prepare("UPDATE users SET reset_requested_at = ? WHERE id = ?").bind(t, u.id).run();
+  if (via === "admin") {
+    await askAdmin();
+    return json({ ok: true, via });
+  }
+  const hourAgo = new Date(Date.now() - RESET_MS).toISOString();
+  const recent = await env.DB.prepare("SELECT COUNT(*) AS n FROM password_resets WHERE user_id = ? AND created_at > ?").bind(u.id, hourAgo).first<{ n: number }>();
+  if ((recent?.n ?? 0) >= RESETS_PER_HOUR) return json({ ok: true, via }); // enough links in their inbox already
+  const token = hex(crypto.getRandomValues(new Uint8Array(32)));
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM password_resets WHERE expires_at <= ?").bind(t),
+    env.DB.prepare("INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .bind(await sha256(token), u.id, t, new Date(Date.now() + RESET_MS).toISOString()),
+  ]);
+  const link = `${new URL(req.url).origin}/#/reset?token=${token}`;
+  try {
+    await sendResetEmail(env, u, link);
+  } catch (e) {
+    console.error("reset email failed", e);
+    await askAdmin();
+  }
+  return json({ ok: true, via });
+}
+
+async function sendResetEmail(env: Env, u: UserRow, link: string) {
+  const first = u.name.split(/\s+/)[0];
+  const text = `Hi ${first},\n\nSomeone asked to reset your Content Factory password. To pick a new one, open this link (it works once, for the next hour):\n\n${link}\n\nIf you didn't ask, ignore this email. Your password stays the same.`;
+  const esc = (x: string) => x.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const html = `<div style="font-family:Arial,sans-serif;font-size:16px;line-height:24px;color:#1d1d1f;max-width:520px">
+<p>Hi ${esc(first)},</p><p>Someone asked to reset your Content Factory password. To pick a new one, press the button. It works once, for the next hour.</p>
+<p style="margin:28px 0"><a href="${esc(link)}" style="background:#F9B023;color:#1d1d1f;text-decoration:none;font-weight:bold;padding:12px 22px;border-radius:999px;display:inline-block">Pick a New Password</a></p>
+<p style="color:#6b6b6b;font-size:14px">If you didn't ask, ignore this email. Your password stays the same.</p></div>`;
+  const r = await fetch(`${env.RESEND_BASE_URL ?? "https://api.resend.com"}/emails`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      from: env.EMAIL_FROM || "Content Factory <noreply@shopbgx.com>",
+      to: [u.email],
+      subject: "Reset your Content Factory password",
+      text,
+      html,
+    }),
+  });
+  if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 300)}`);
+}
+
+/** The page the emailed link opens: sets the new password and signs out every browser. */
+export async function resetWithLink(req: Request, env: Env) {
+  const b = await body<{ token?: string; next?: string }>(req);
+  const token = String(b.token ?? "");
+  const bad = new HttpError(400, "That link has expired or was already used. Ask for a new one on the sign-in page.");
+  if (!/^[0-9a-f]{64}$/.test(token)) throw bad;
+  const t = now();
+  const row = await env.DB.prepare(
+    "SELECT r.user_id FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = ? AND r.used_at IS NULL AND r.expires_at > ? AND u.disabled = 0",
+  ).bind(await sha256(token), t).first<{ user_id: string }>();
+  if (!row) throw bad;
+  const h = await hashPassword(checkNewPassword(b.next));
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET pw_hash = ?, pw_salt = ?, pw_iters = ?, must_change = 0, failed_logins = 0, locked_until = NULL, reset_requested_at = NULL, updated_at = ? WHERE id = ?")
+      .bind(h.pw_hash, h.pw_salt, h.pw_iters, t, row.user_id),
+    env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(row.user_id),
+    env.DB.prepare("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL").bind(t, row.user_id),
+  ]);
   return json({ ok: true });
 }
 

@@ -23,4 +23,6 @@
   //   WORKER_TOKEN   the token AI-DESKTOP uses to pick up jobs
   //   SUBMIT_TOKENS  JSON {"<token>": "beegraphix" | "rugbee" | "*"}: who may submit and see jobs, per brand
   //   ANTHROPIC_API_KEY  (optional) Claude API key for "Draft it for me"
+  //   RESEND_API_KEY     (optional) Resend key for "Forgot your password?" emails, sent from noreply@shopbgx.com
+  //                      (verified in Resend). Without it, the request shows on the Team page instead.
 }
