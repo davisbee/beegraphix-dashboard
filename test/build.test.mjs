@@ -225,14 +225,15 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: sp });
   assert.equal(made.status, 201, JSON.stringify(made.data));
   const id = made.data.id;
+  const slug = `post-test-${Date.now().toString(36)}`; // the local database keeps addresses between runs
   assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.supported, true);
   assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: "x", copy: {} })).status, 400, "slug too short");
   const copy = { page: { title: "Hoodie | BeeGraphix", headline: "The hoodie your crew wears", description: "d" }, captions: { facebook: "Look — at this {url}" } };
   assert.equal((await call("POST", `/api/jobs/${id}/post/preview`, T.bgx)).status, 409, "needs copy and a finished video");
-  const put = await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: "post-test-hoodie", copy, start: "2099-01-05" });
+  const put = await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug, copy, start: "2099-01-05" });
   assert.equal(put.status, 200, JSON.stringify(put.data));
   assert.equal(put.data.post.copy.captions.facebook, "Look, at this {url}", "no em dashes");
-  assert.equal(put.data.link, "https://blog.beegraphix.com/post-test-hoodie/");
+  assert.equal(put.data.link, `https://blog.beegraphix.com/${slug}/`);
   assert.equal((await call("POST", `/api/jobs/${id}/post/draft`, T.bgx)).status, 503, "Claude is off in tests");
   assert.equal((await call("GET", `/api/jobs/${id}/post`, T.rugbee)).status, 404, "other brand");
 
@@ -251,10 +252,10 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.ok(!(await call("GET", "/api/jobs", T.bgx)).data.jobs.some((j) => j.kind === "page"), "page jobs stay off the Videos list");
   const pj = (await call("POST", "/api/desktop/claim", T.worker)).data;
   assert.equal(pj.kind, "page");
-  assert.equal(pj.payload.slug, "post-test-hoodie");
+  assert.equal(pj.payload.slug, slug);
   assert.equal(pj.payload.copy.page.headline, "The hoodie your crew wears");
-  await call("POST", `/api/desktop/jobs/${pj.id}/finish`, T.worker, { message: "Preview ready", result: { previewUrl: "https://preview.beegraphix-blog.pages.dev/post-test-hoodie/" } });
-  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.previewUrl, "https://preview.beegraphix-blog.pages.dev/post-test-hoodie/");
+  await call("POST", `/api/desktop/jobs/${pj.id}/finish`, T.worker, { message: "Preview ready", result: { previewUrl: `https://preview.beegraphix-blog.pages.dev/${slug}/` } });
+  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.previewUrl, `https://preview.beegraphix-blog.pages.dev/${slug}/`);
 
   assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.bgx, {})).status, 403, "staff can't approve");
   const ap = await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06" });
@@ -262,16 +263,16 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
   assert.equal(pub.kind, "publish");
   assert.equal(pub.payload.start, "2099-01-06");
-  assert.equal(pub.payload.link, "blog.beegraphix.com/post-test-hoodie");
-  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { message: "Posted", result: { liveUrl: "https://blog.beegraphix.com/post-test-hoodie/", posted: [{ platform: "facebook", status: "scheduled" }] } });
+  assert.equal(pub.payload.link, `blog.beegraphix.com/${slug}`);
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { message: "Posted", result: { liveUrl: `https://blog.beegraphix.com/${slug}/`, posted: [{ platform: "facebook", status: "scheduled" }] } });
   const after = (await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post;
-  assert.equal(after.liveUrl, "https://blog.beegraphix.com/post-test-hoodie/");
+  assert.equal(after.liveUrl, `https://blog.beegraphix.com/${slug}/`);
   assert.equal(after.posted[0].platform, "facebook");
   assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { copy })).status, 409, "posted ones are locked");
 
   // another video can't take the same address
   const other = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { ...sp, title: "Other Hoodie" } });
-  assert.equal((await call("PUT", `/api/jobs/${other.data.id}/post`, T.bgx, { slug: "post-test-hoodie", copy })).status, 409);
+  assert.equal((await call("PUT", `/api/jobs/${other.data.id}/post`, T.bgx, { slug, copy })).status, 409);
   // Rugbee can't post yet
   const rb = await call("POST", "/api/jobs", T.rugbee, { kind: "build", spec: sp });
   assert.equal((await call("GET", `/api/jobs/${rb.data.id}/post`, T.rugbee)).data.supported, false);
