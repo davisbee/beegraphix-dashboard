@@ -1,17 +1,18 @@
 // New video: the spec staff fill in on the New video screen, and "Draft it for me".
 //
-// A "build" job carries the whole spec. The desktop starts a Top 5 campaign from it (new-campaign.mjs),
-// downloads the footage and photos, keys green screen clips, writes captions, then renders it.
+// A "build" job carries the whole spec, with the format's beats laid out (formats.ts). The desktop starts
+// a campaign from it (new-campaign.mjs), downloads the footage and photos, keys green screen clips,
+// writes captions, then renders it.
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { HttpError, body, json, now, type Env } from "./common";
 import type { Caller } from "./auth";
 import { readyUploads } from "./uploads";
+import { formatOf, type BeatKind, type FormatDef } from "./formats";
 
 export const GOALS = ["reach", "target", "sell"] as const;
-export const LOOKS = ["creator", "full"] as const; // variant ids in the Top 5 template
-export const CLIPS = ["hook", "p1", "p2", "p3", "p4", "p5", "cta"] as const;
+export const LOOKS = ["creator", "full"] as const; // variant ids the desktop renders
 
 export interface BuildProduct {
   name: string;
@@ -23,8 +24,19 @@ export interface BuildProduct {
   photo: string | null;
 }
 
+export interface BuildBeat {
+  id: string;
+  kind: BeatKind;
+  product?: number;
+  products?: number[];
+  script: string;
+  text?: string;
+  eyebrow?: string;
+  badge?: string;
+}
+
 export interface BuildSpec {
-  template: "top5";
+  template: string;
   title: string;
   goal: (typeof GOALS)[number];
   audience: string;
@@ -35,9 +47,16 @@ export interface BuildSpec {
   cta: string;
   link: string;
   products: BuildProduct[];
-  footage: Partial<Record<(typeof CLIPS)[number], string>>;
+  beats: BuildBeat[];
+  /** This vs That: which product wins (0 or 1) */
+  winner?: number;
+  ctaEyebrow: string;
+  footage: Record<string, string>;
   greenScreen: boolean;
 }
+
+/** Clips the presenter films for a format: the hook, one per beat, the payoff. */
+export const clipsOf = (f: FormatDef) => ["hook", ...f.beats.map((b) => b.id), "cta"];
 
 const str = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const URLISH = /^(https?:\/\/)?[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i;
@@ -52,7 +71,8 @@ function link(v: unknown, what: string) {
 /** Checks everything the person typed and that every upload is theirs and finished. */
 export async function validateSpec(env: Env, brand: string, raw: any): Promise<BuildSpec> {
   const r = raw ?? {};
-  if ((r.template ?? "top5") !== "top5") throw new HttpError(400, "Top 5 List is the only template so far");
+  const f = formatOf(r.template);
+  if (!f) throw new HttpError(400, "Pick a format");
   const title = str(r.title, 120);
   if (title.length < 4) throw new HttpError(400, "Give the video a title");
   if (!GOALS.includes(r.goal)) throw new HttpError(400, "Pick a goal: reach, target or sell");
@@ -64,37 +84,61 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   const cta = str(r.cta, 600);
   if (!hook) throw new HttpError(400, "Write the hook, or use Draft It For Me");
   if (!cta) throw new HttpError(400, "Write the payoff, or use Draft It For Me");
-  if (!Array.isArray(r.products) || r.products.length !== 5) throw new HttpError(400, "A Top 5 needs exactly 5 products");
+  const n = f.products.count;
+  if (!Array.isArray(r.products) || r.products.length !== n) throw new HttpError(400, `${f.name} needs exactly ${n} ${n === 1 ? f.products.nameLabel.toLowerCase() : "products"}`);
+  const scripted = new Set(f.beats.filter((b) => b.kind === "product").map((b) => b.product));
   const products: BuildProduct[] = r.products.map((p: any, i: number) => {
+    const what = n === 1 ? f.products.labels[0] : `${f.products.labels[i]}`;
     const name = str(p?.name, 120);
-    if (!name) throw new HttpError(400, `Product ${i + 1} needs a name`);
+    if (!name) throw new HttpError(400, `${what} needs a name`);
     const script = str(p?.script, 600);
-    if (!script) throw new HttpError(400, `Product ${i + 1} needs its line in the script`);
-    const style = str(p?.style, 20).toUpperCase().replace(/[^A-Z0-9-]/g, "");
+    const style = f.products.style ? str(p?.style, 20).toUpperCase().replace(/[^A-Z0-9-]/g, "") : "";
     const photo = p?.photo ? String(p.photo) : null;
-    if (photo && !UUID.test(photo)) throw new HttpError(400, `Product ${i + 1}: bad photo`);
-    return { name, shortName: str(p?.shortName, 40) || name.slice(0, 40), tag: str(p?.tag, 60), style, link: link(p?.link, `Product ${i + 1}'s link`), script, photo };
+    if (photo && !UUID.test(photo)) throw new HttpError(400, `${what}: bad photo`);
+    return { name, shortName: str(p?.shortName, 40) || name.slice(0, 40), tag: str(p?.tag, 60), style, link: link(p?.link, `${what}'s link`), script: scripted.has(i) ? script : "", photo };
   });
   const styles = products.map((p) => p.style).filter(Boolean);
   if (new Set(styles).size !== styles.length) throw new HttpError(400, "Two products have the same style number");
-  const footage: BuildSpec["footage"] = {};
-  for (const clip of CLIPS) {
+
+  // Product beats keep their line with the product (the Top 5 screen always worked that way); the rest in beats.
+  const typed = r.beats && typeof r.beats === "object" ? r.beats : {};
+  const beats: BuildBeat[] = f.beats.map((b) => {
+    const script = b.kind === "product" ? products[b.product!].script : str(typed[b.id]?.script, 600);
+    if (!script) throw new HttpError(400, `Write the line for "${b.label}", or use Draft It For Me`);
+    const text = b.text ? (b.textKind === "list" ? String(typed[b.id]?.text ?? "").split(/\n+/).map((l) => str(l, 60)).filter(Boolean).slice(0, 5).join("\n") : str(typed[b.id]?.text, 80)) : "";
+    return {
+      id: b.id, kind: b.kind, script,
+      ...(b.product !== undefined ? { product: b.product } : {}),
+      ...(b.kind === "compare" ? { products: [0, 1] } : {}),
+      ...(text ? { text } : {}),
+      ...(b.eyebrow ? { eyebrow: b.eyebrow } : {}),
+      ...(b.badge !== undefined ? { badge: b.badge } : {}),
+    };
+  });
+  let winner: number | undefined;
+  if (f.winner) {
+    winner = Number(r.winner);
+    if (winner !== 0 && winner !== 1) throw new HttpError(400, "Pick the winner: A or B");
+  }
+
+  const footage: Record<string, string> = {};
+  for (const clip of clipsOf(f)) {
     const id = r.footage?.[clip];
     if (!id) continue;
     if (!UUID.test(String(id))) throw new HttpError(400, `Bad footage for ${clip}`);
     footage[clip] = String(id);
   }
+  const clipLabel = (clip: string) => (clip === "hook" ? "the hook" : clip === "cta" ? "the payoff" : `"${f.beats.find((b) => b.id === clip)?.label}"`);
   await readyUploads(env, brand, [
-    ...Object.entries(footage).map(([clip, id]) => ({ id: id!, kind: "footage" as const, what: `Video for ${clipName(clip)}` })),
-    ...products.flatMap((p, i) => (p.photo ? [{ id: p.photo, kind: "photo" as const, what: `Photo for product ${i + 1}` }] : [])),
+    ...Object.entries(footage).map(([clip, id]) => ({ id, kind: "footage" as const, what: `Video for ${clipLabel(clip)}` })),
+    ...products.flatMap((p, i) => (p.photo ? [{ id: p.photo, kind: "photo" as const, what: `Photo for ${f.products.labels[i]}` }] : [])),
   ]);
   return {
-    template: "top5", title, goal: r.goal, audience: str(r.audience, 200), look: r.look, presenter,
-    hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, footage, greenScreen: !!r.greenScreen,
+    template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look: r.look, presenter,
+    hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
+    ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: !!r.greenScreen,
   };
 }
-
-const clipName = (clip: string) => (clip === "hook" ? "the hook" : clip === "cta" ? "the payoff" : `product ${clip.slice(1)}`);
 
 /** A campaign folder name for the desktop: readable, and unique to this job. */
 export function campaignId(title: string, jobId: string) {
@@ -118,23 +162,29 @@ const GOAL_NOTES: Record<string, string> = {
 };
 
 const DraftSchema = z.object({
-  title: z.string().describe("Video title, e.g. 'Top 5 Quarter Zips for Fall/Winter 2026'"),
+  title: z.string().describe("Video title"),
   hook: z.string().describe("Opening line spoken to camera. Under 4 seconds out loud, about 12 to 20 words."),
   hookText: z.string().describe("The hook as short on-screen text, 6 words or fewer."),
+  beats: z.array(z.object({
+    id: z.string().describe("The beat id exactly as given"),
+    script: z.string().describe("What the presenter says for this beat"),
+    text: z.string().describe("On-screen text for this beat, following its on-screen instruction. Empty string if it has none."),
+  })).describe("One entry per beat, in the order given"),
   products: z.array(z.object({
-    shortName: z.string().describe("Product name as it fits on screen, 4 words or fewer."),
+    shortName: z.string().describe("Name as it fits on screen, 4 words or fewer."),
     tag: z.string().describe("3 to 5 word reason to pick it, shown on screen."),
-    script: z.string().describe("Spoken line, starting 'Number one,' / 'Number two,' etc. 2 or 3 short sentences, about 8 seconds out loud."),
-  })).describe("Exactly 5, in the same order as the products given."),
+  })).describe("One entry per product, in the order given"),
   cta: z.string().describe("Payoff spoken to camera: where to go and what to do next. About 10 seconds out loud."),
 });
 
-/** POST /api/draft: Claude writes the hook, the five product lines and the payoff in the presenter's voice. */
+/** POST /api/draft: Claude writes the hook, each beat and the payoff in the presenter's voice. */
 export async function draftScript(req: Request, env: Env, c: Caller, brand: string) {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(503, "Draft It For Me isn't switched on yet. Write the script yourself for now.");
-  const b = await body<{ goal?: string; audience?: string; topic?: string; notes?: string; presenter?: string; products?: Array<{ name?: string; link?: string }> }>(req);
-  const products = (Array.isArray(b.products) ? b.products : []).map((p) => ({ name: str(p?.name, 120), link: str(p?.link, 300) }));
-  if (products.length !== 5 || products.some((p) => !p.name)) throw new HttpError(400, "Name all 5 products first");
+  const b = await body<{ template?: string; goal?: string; audience?: string; topic?: string; notes?: string; presenter?: string; winner?: number; products?: Array<{ name?: string; link?: string }> }>(req);
+  const f = formatOf(b.template);
+  if (!f) throw new HttpError(400, "Pick a format");
+  const products = (Array.isArray(b.products) ? b.products : []).slice(0, f.products.count).map((p) => ({ name: str(p?.name, 120), link: str(p?.link, 300) }));
+  if (products.length !== f.products.count || products.some((p) => !p.name)) throw new HttpError(400, f.products.count === 1 ? `Name the ${f.products.nameLabel.toLowerCase()} first` : `Name all ${f.products.count} products first`);
   const goal = GOALS.includes(b.goal as any) ? b.goal! : "reach";
 
   const since = new Date(Date.now() - 3600_000).toISOString();
@@ -143,16 +193,21 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
   await env.DB.prepare("INSERT INTO ai_calls (who, at) VALUES (?, ?)").bind(c.label, now()).run();
 
   const prompt = [
-    `Write the script for a vertical "Top 5" social video (Reels, TikTok, Shorts), about 60 seconds, spoken to camera by ${str(b.presenter, 80) || "the presenter"}.`,
+    `Write the script for a vertical social video (Reels, TikTok, Shorts) spoken to camera by ${str(b.presenter, 80) || "the presenter"}. It's ${f.brief}.`,
+    "Style: a hard hook in the first second, short punchy sentences, one idea per beat, one clear call to action.",
     BRAND_NOTES[brand] ?? "",
     GOAL_NOTES[goal],
     b.audience ? `Audience: ${str(b.audience, 200)}` : "",
     b.topic ? `What the video is about: ${str(b.topic, 300)}` : "",
-    "The five products, ranked 1 to 5:",
-    ...products.map((p, i) => `${i + 1}. ${p.name}${p.link ? ` (${p.link})` : ""}`),
+    `${f.products.title}:`,
+    ...products.map((p, i) => `${f.products.labels[i]}: ${p.name}${p.link ? ` (${p.link})` : ""}`),
+    f.winner ? `The winner is ${f.products.labels[Number(b.winner) === 1 ? 1 : 0]}.` : "",
+    "The beats, in order (use these ids):",
+    ...f.beats.map((x) => `- ${x.id} (${x.label}${x.product !== undefined ? `, about ${f.products.labels[x.product]}` : ""}): ${x.write}${x.text ? ` On screen: ${x.text}${x.textKind === "list" ? ", one per line" : ""}.` : " No on-screen text."}`),
+    `Title example: "${f.titleExample}".`,
     b.notes ? `Notes from the presenter: ${str(b.notes, 1200)}` : "",
     "Write like a real person talking, not an ad: plain words, contractions, first person. No em dashes, no hashtags, no emoji.",
-    "Only say things about a product that follow from its name or the notes. Don't invent prices, specs or materials.",
+    "Only say things that follow from the names, the page addresses or the notes. Don't invent prices, specs, materials or results.",
   ].filter(Boolean).join("\n");
 
   const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, baseURL: env.ANTHROPIC_BASE_URL || undefined, maxRetries: 2, timeout: 60_000 });
@@ -167,8 +222,11 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
     });
     if (res.stop_reason === "refusal") throw new HttpError(422, "Claude wouldn't write that one. Try different wording.");
     const out = res.parsed_output;
-    if (!out || out.products.length !== 5) throw new HttpError(502, "The draft came back incomplete. Try again.");
-    return json({ draft: out });
+    const byId = new Map((out?.beats ?? []).map((x) => [x.id, x]));
+    if (!out || f.beats.some((x) => !byId.get(x.id)?.script) || out.products.length < f.products.count) throw new HttpError(502, "The draft came back incomplete. Try again.");
+    // Steps come back one per line; everything else is a single line.
+    const beats = f.beats.map((x) => ({ id: x.id, script: byId.get(x.id)!.script, text: x.text ? byId.get(x.id)!.text : "" }));
+    return json({ draft: { ...out, beats, products: out.products.slice(0, f.products.count) } });
   } catch (e) {
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "Claude is busy. Try again in a minute.");

@@ -275,13 +275,12 @@ async function pageRender(params) {
 
 // ---------- new video ----------
 
-const CLIP_LABEL = { hook: "Hook", p1: "#1", p2: "#2", p3: "#3", p4: "#4", p5: "#5", cta: "Payoff" };
 const VIDEO_TYPES = { mov: "video/quicktime", mp4: "video/mp4", m4v: "video/x-m4v" };
 const PHOTO_TYPES = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" };
 
 function blankVideo() {
   return {
-    goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "",
+    template: "top5", goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "", beats: {}, winner: 0,
     presenter: { mode: "self", name: state.me.name, title: "" },
     hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false,
     products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "" })),
@@ -324,9 +323,18 @@ async function sendFile(file, kind, onProgress) {
 
 async function pageNew() {
   const key = `newVideo:${state.brand}`;
+  // The formats (Top 5, Product Spotlight, ...) and their beats come from the server: src/formats.ts.
+  if (!state.formats) state.formats = (await api("GET", "/api/formats")).formats;
   let v;
   try { v = { ...blankVideo(), ...JSON.parse(recall(key) || "null") }; } catch { v = blankVideo(); }
   if (!v || !Array.isArray(v.products) || v.products.length !== 5) v = blankVideo();
+  const f = state.formats.find((x) => x.id === v.template) ?? state.formats[0];
+  v.template = f.id;
+  const N = f.products.count;
+  const prods = v.products.slice(0, N); // the state always keeps 5, so switching formats loses nothing
+  for (const b of f.beats) v.beats[b.id] = { script: "", text: "", ...(v.beats[b.id] || {}) };
+  const clips = ["hook", ...f.beats.map((b) => b.id), "cta"];
+  const clipLabel = (c) => (c === "hook" ? "Hook" : c === "cta" ? "Payoff" : f.beats.find((b) => b.id === c).label);
   const save = () => store(key, JSON.stringify(v));
   const busy = new Set(); // uploads still going
 
@@ -346,23 +354,24 @@ async function pageNew() {
       <div class="field" style="margin-top:18px;margin-bottom:0"><label for="audience">Who's it for?</label><input type="text" id="audience" data-k="audience" placeholder="e.g. Contractors who outfit crews that work outside"></div>
     </div>
 
-    <div class="card"><div class="step">2</div><h2>Template and look</h2>
-      <div class="choices" style="margin-top:12px">${choice("template", "top5", "Top 5 List", "A hook, five products counted down, and a payoff. About a minute.")}</div>
+    <div class="card"><div class="step">2</div><h2>Format and look</h2>
+      <div class="choices three" style="margin-top:12px">${state.formats.map((x) => choice("template", x.id, x.name, x.blurb)).join("")}</div>
       <div class="choices two" style="margin-top:10px">
         ${choice("look", "creator", "Creator-style cut", "Feels like a person talking, with a music bed. Best for Reels and TikTok.")}
         ${choice("look", "full", "Polished brand reel", "Full brand graphics on every product.")}
       </div>
     </div>
 
-    <div class="card"><div class="step">3</div><h2>The five products</h2><p class="muted small" style="margin:0 0 16px">Ranked, #1 first. Paste each product's link and the name, style number and photo fill in by themselves. Or type them, and drag a photo onto the Photo box. A clean photo on white works best.</p>
-      ${v.products.map((_, i) => `<div class="product" data-i="${i}">
-        <div class="pnum">#${i + 1}</div>
+    <div class="card"><div class="step">3</div><h2>${esc(f.products.title)}</h2><p class="muted small" style="margin:0 0 16px">${esc(f.products.hint)}</p>
+      ${prods.map((_, i) => `<div class="product" data-i="${i}">
+        <div class="pnum">${esc(f.products.labels[i])}</div>
         <div class="pgrid">
-          <div class="field wide"><label for="pl${i}">Product link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="Paste the product page, e.g. https://beegraphix.com/…"><div class="hint" data-linkstate="${i}"></div></div>
-          <div class="field"><label for="pn${i}">Product name</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
-          <div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" data-stylebox="${i}" placeholder="e.g. 5000 or Gildan 5000"></div>
+          <div class="field wide"><label for="pl${i}">Link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="${esc(f.products.linkHint)}"><div class="hint" data-linkstate="${i}"></div></div>
+          <div class="field${f.products.style ? "" : " wide"}"><label for="pn${i}">${esc(f.products.nameLabel)}</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
+          ${f.products.style ? `<div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" data-stylebox="${i}" placeholder="e.g. 5000 or Gildan 5000"></div>` : ""}
           <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}<div class="colors" data-colors="${i}" hidden></div></div>
         </div></div>`).join("")}
+      ${f.winner ? `<h3 class="sub">Who wins?</h3><div class="choices two">${choice("winner", "0", "A", "Product A wins")}${choice("winner", "1", "B", "Product B wins")}</div>` : ""}
     </div>
 
     <div class="card"><div class="step">4</div><h2>Script</h2><p class="muted small" style="margin:0 0 16px">Write it yourself, or tell Claude what the video is about and press Draft It For Me. Then make it sound like you.</p>
@@ -374,8 +383,15 @@ async function pageNew() {
         <div class="field"><label for="hookText">On-screen hook, 6 words or fewer</label><input type="text" id="hookText" data-k="hookText" maxlength="60"></div>
       </div>
       <div class="scriptpart"><div class="eyebrow">Middle</div>
-        ${v.products.map((_, i) => `<div class="field"><label for="sc${i}">#${i + 1} <span class="muted" data-pname="${i}"></span></label><textarea id="sc${i}" rows="3" data-k="products.${i}.script" placeholder="Number ${["one", "two", "three", "four", "five"][i]}, the …"></textarea>
-          <div class="grid2 tight"><input type="text" aria-label="#${i + 1} short name on screen" data-k="products.${i}.shortName" placeholder="Name on screen (short)"><input type="text" aria-label="#${i + 1} on-screen tag" data-k="products.${i}.tag" placeholder="Why pick it, 3 to 5 words"></div></div>`).join("")}
+        ${f.beats.map((b) => {
+          const i = b.product;
+          const scriptKey = b.kind === "product" ? `products.${i}.script` : `beats.${b.id}.script`;
+          const textBox = !b.text ? "" : b.textKind === "list"
+            ? `<textarea rows="4" aria-label="${esc(b.label)} on screen" data-k="beats.${b.id}.text" placeholder="${esc(b.text)}"></textarea>`
+            : `<input type="text" aria-label="${esc(b.label)} on screen" data-k="beats.${b.id}.text" maxlength="80" placeholder="${esc(b.text)}">`;
+          return `<div class="field"><label for="sc-${b.id}">${esc(b.label)}${i !== undefined ? ` <span class="muted" data-pname="${i}"></span>` : ""}</label><textarea id="sc-${b.id}" rows="3" data-k="${scriptKey}" placeholder="${esc(b.write)}"></textarea>
+          ${b.kind === "product" ? `<div class="grid2 tight">${b.text ? textBox : `<input type="text" aria-label="${esc(b.label)} on-screen tag" data-k="products.${i}.tag" placeholder="Why pick it, 3 to 5 words">`}<input type="text" aria-label="${esc(b.label)} short name on screen" data-k="products.${i}.shortName" placeholder="Name on screen (short)"></div>` : textBox}</div>`;
+        }).join("")}
       </div>
       <div class="scriptpart"><div class="eyebrow">Payoff</div>
         <div class="field"><label for="cta">Closing line: where to go and what to do</label><textarea id="cta" rows="3" data-k="cta"></textarea></div>
@@ -393,13 +409,13 @@ async function pageNew() {
         <div class="field"><label for="prTitle">Title on screen <span class="muted">(optional)</span></label><input type="text" id="prTitle" data-k="presenter.title" placeholder="e.g. Vice President, BeeGraphix"></div>
       </div>
       <h3 class="sub">Footage</h3>
-      <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each product, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
+      <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each part of the middle, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
       <label class="check" style="margin-bottom:14px"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
-      <div class="slots">${Object.keys(CLIP_LABEL).map((c) => slot(`clip-${c}`, CLIP_LABEL[c], "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
+      <div class="slots">${clips.map((c) => slot(`clip-${c}`, clipLabel(c), "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
     </div>
 
     <div class="card"><div class="step">6</div><h2>Build it</h2>
-      <div class="field"><label for="title">Video title</label><input type="text" id="title" data-k="title" placeholder="e.g. Top 5 Carhartt Picks for Fall/Winter 2026"></div>
+      <div class="field"><label for="title">Video title</label><input type="text" id="title" data-k="title" placeholder="e.g. ${esc(f.titleExample)}"></div>
       <label class="check" style="margin-bottom:18px"><input type="checkbox" data-k="draft"><span>Quick preview first<br><span class="small muted">720p and faster. Check the cut, then use Render Again for the full version.</span></span></label>
       <div id="err"></div>
       <div class="row"><button class="btn" type="submit" id="buildBtn">Build My Video</button><button class="btn outline" type="button" id="clearBtn">Start Over</button></div>
@@ -421,7 +437,8 @@ async function pageNew() {
     });
     (form.querySelector(`input[name=goal][value="${v.goal}"]`) ?? form.querySelector("input[name=goal]")).checked = true;
     (form.querySelector(`input[name=look][value="${v.look}"]`) ?? form.querySelector("input[name=look]")).checked = true;
-    form.querySelector("input[name=template]").checked = true;
+    form.querySelector(`input[name=template][value="${f.id}"]`).checked = true;
+    if (f.winner) form.querySelector(`input[name=winner][value="${v.winner === 1 ? 1 : 0}"]`).checked = true;
     form.querySelector("input[name=presenter][value=self]").checked = true;
     names();
   };
@@ -430,6 +447,8 @@ async function pageNew() {
     const el = e.target;
     if (el.dataset.k) set(el.dataset.k, el.type === "checkbox" ? el.checked : el.value);
     else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
+    else if (el.name === "winner") v.winner = Number(el.value);
+    else if (el.name === "template") { v.template = el.value; save(); return pageNew(); } // redraw for the new format
     else return;
     if (el.dataset.k?.endsWith(".name")) names();
     save();
@@ -555,7 +574,7 @@ async function pageNew() {
       } catch (err) { stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`; } finally { busy.delete(`color${i}`); }
     };
   };
-  v.products.forEach((_, i) => showColors(i));
+  prods.forEach((_, i) => showColors(i));
   const lookup = (i) => {
     const p = v.products[i];
     const auto = p.auto || {};
@@ -583,21 +602,27 @@ async function pageNew() {
   $("#draftBtn").onclick = async () => {
     const btn = $("#draftBtn");
     const out = $("#draftState");
-    if (v.products.some((p) => !p.name.trim())) { out.innerHTML = `<span class="bad">Name all five products first (step 3).</span>`; return; }
-    const written = [v.hook, v.cta, ...v.products.map((p) => p.script)].some((x) => x.trim());
+    if (prods.some((p) => !p.name.trim())) { out.innerHTML = `<span class="bad">${N === 1 ? `Name the ${esc(f.products.nameLabel.toLowerCase())} first` : `Name all ${N} products first`} (step 3).</span>`; return; }
+    const written = [v.hook, v.cta, ...prods.map((p) => p.script), ...f.beats.map((b) => v.beats[b.id].script)].some((x) => x.trim());
     if (written && !confirm("Replace what's in the script now with a new draft?")) return;
     btn.disabled = true;
     out.textContent = "Claude is writing… (about 20 seconds)";
     try {
       const { draft } = await api("POST", `/api/draft?brand=${state.brand}`, {
-        goal: v.goal, audience: v.audience, topic: v.topic, notes: v.notes, presenter: v.presenter.name,
-        products: v.products.map((p) => ({ name: p.name, link: p.link })),
+        template: f.id, goal: v.goal, audience: v.audience, topic: v.topic, notes: v.notes, presenter: v.presenter.name, winner: v.winner,
+        products: prods.map((p) => ({ name: p.name, link: p.link })),
       });
       v.hook = draft.hook;
       v.hookText = draft.hookText;
       v.cta = draft.cta;
       if (!v.title.trim()) v.title = draft.title;
-      draft.products.forEach((d, i) => Object.assign(v.products[i], { script: d.script, shortName: d.shortName, tag: d.tag }));
+      draft.products.forEach((d, i) => Object.assign(v.products[i], { shortName: d.shortName, tag: d.tag }));
+      for (const d of draft.beats) {
+        const b = f.beats.find((x) => x.id === d.id);
+        if (b.kind === "product") v.products[b.product].script = d.script;
+        else v.beats[b.id].script = d.script;
+        if (b.text) v.beats[b.id].text = d.text;
+      }
       save();
       fill();
       out.textContent = "Drafted. Read it out loud and change anything that doesn't sound like you.";
@@ -621,10 +646,12 @@ async function pageNew() {
     btn.disabled = true;
     try {
       const spec = {
-        template: "top5", title: v.title, goal: v.goal, audience: v.audience, look: v.look,
+        template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.look, winner: v.winner,
         presenter: { mode: "self", name: v.presenter.name, title: v.presenter.title },
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
-        products: v.products.map(({ photoName, auto, ...p }) => p), footage: v.footage,
+        products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
+        beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),
+        footage: Object.fromEntries(clips.filter((c) => v.footage[c]).map((c) => [c, v.footage[c]])),
       };
       const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, draft: v.draft, spec });
       store(key, "");

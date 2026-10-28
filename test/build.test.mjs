@@ -144,3 +144,49 @@ test("style number lookup needs a style and the S&S login", async () => {
   assert.equal(r.status, 503);
   assert.match(r.data.error, /isn't set up/);
 });
+
+test("each format lays out its own beats, and This vs That needs a winner", async () => {
+  await drain();
+  const f = await call("GET", "/api/formats", T.bgx);
+  assert.equal(f.status, 200);
+  assert.deepEqual(f.data.formats.map((x) => x.id), ["top5", "spotlight", "versus", "mistakes", "story", "program"]);
+
+  const one = (o = {}) => ({ name: "Thing", style: "", link: "", script: "It fixes that.", shortName: "", tag: "", photo: null, ...o });
+  const spotlight = spec({
+    template: "spotlight", title: "The Hoodie Crews Wear",
+    products: [one({ style: "pc78h" })],
+    beats: { problem: { script: "Nobody wears the hoodie.", text: "Hoodies nobody wears" }, proof: { script: "Our crew wears it daily.", text: "" } },
+    footage: {},
+  });
+  const s = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spotlight });
+  assert.equal(s.status, 201, JSON.stringify(s.data));
+  const beats = s.data.payload.spec.beats;
+  assert.deepEqual(beats.map((b) => [b.id, b.kind]), [["problem", "talk"], ["fix", "product"], ["proof", "talk"]]);
+  assert.equal(beats[1].script, "It fixes that.");
+  assert.equal(beats[1].badge, "");
+  assert.equal(beats[0].text, "Hoodies nobody wears");
+  assert.equal(s.data.payload.spec.products[0].style, "PC78H");
+  assert.equal(s.data.payload.spec.ctaEyebrow, "Get yours");
+
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { ...spotlight, beats: { problem: { script: "" } } } })).status, 400, "every beat needs its line");
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { ...spotlight, products: [one(), one()] } })).status, 400, "spotlight is one product");
+
+  const versus = spec({ template: "versus", title: "This vs That Test", products: [one({ name: "A" }), one({ name: "B" })], beats: { verdict: { script: "B wins.", text: "B wins" } } });
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: versus })).status, 400, "needs a winner");
+  const v = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { ...versus, winner: 1 } });
+  assert.equal(v.status, 201, JSON.stringify(v.data));
+  assert.equal(v.data.payload.spec.winner, 1);
+  assert.deepEqual(v.data.payload.spec.beats[2].products, [0, 1]);
+
+  const program = spec({
+    template: "program", title: "FAN Fundraiser Test", products: [one({ name: "FAN Fundraiser", style: "IGNORED", script: "" })],
+    beats: { problem: { script: "Fundraising is a pain." }, what: { text: "Keep up to 90%" }, how: { script: "Here's how.", text: "Pick gear\n\nShare the store\nWe ship it" }, proof: { script: "One team raised $3,000." } },
+  });
+  assert.equal((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: program })).status, 400, "the program's own line is required");
+  program.products[0].script = "It's a fan store that pays you.";
+  const pg = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: program });
+  assert.equal(pg.status, 201, JSON.stringify(pg.data));
+  assert.equal(pg.data.payload.spec.products[0].style, "", "programs have no style number");
+  assert.equal(pg.data.payload.spec.beats.find((b) => b.id === "how").text, "Pick gear\nShare the store\nWe ship it");
+  await drain();
+});

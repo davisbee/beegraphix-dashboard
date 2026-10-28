@@ -16,6 +16,7 @@
 //     POST /api/lookup/style?brand=   {style} -> {name, style, photo} from the supplier (S&S Activewear)
 //     POST /api/lookup/image?brand=   {url} -> {photo}: a photo dragged out of another web page
 //     GET  /api/uploads/:id/file      a product photo, to show it on the New video screen
+//     GET  /api/formats               the video formats and their beats (formats.ts)
 //     POST /api/draft?brand=          {goal, audience, topic, notes, presenter, products: [{name, link}]} -> script
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
@@ -35,6 +36,7 @@
 
 import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
+import { FORMATS } from "./formats";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
@@ -398,6 +400,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/lookup/style" && m === "POST") return lookupStyle(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/lookup/image" && m === "POST") return lookupImage(req, env, c, brandFor(c, url.searchParams.get("brand")));
   if (p === "/api/lookup" && m === "POST") return lookupProduct(req, env, c, brandFor(c, url.searchParams.get("brand")));
+  if (p === "/api/formats" && m === "GET") return json({ formats: FORMATS });
   if (p === "/api/draft" && m === "POST") return draftScript(req, env, c, brandFor(c, url.searchParams.get("brand")));
 
   if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
