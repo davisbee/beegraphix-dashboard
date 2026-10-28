@@ -21,6 +21,7 @@ export interface UserRow {
   created_at: string;
   updated_at: string;
   last_login_at: string | null;
+  reset_requested_at: string | null;
 }
 
 /** Who is calling: a signed-in person, or a script holding one of the SUBMIT_TOKENS. */
@@ -89,6 +90,7 @@ export function publicUser(u: UserRow) {
     disabled: !!u.disabled,
     createdAt: u.created_at,
     lastLoginAt: u.last_login_at,
+    resetRequestedAt: u.reset_requested_at,
   };
 }
 
@@ -146,7 +148,7 @@ export async function login(req: Request, env: Env) {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND expires_at <= ?").bind(u.id, t),
     env.DB.prepare("INSERT INTO sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)").bind(await sha256(token), u.id, t, expires),
-    env.DB.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = ? WHERE id = ?").bind(t, u.id),
+    env.DB.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL, reset_requested_at = NULL, last_login_at = ? WHERE id = ?").bind(t, u.id),
   ]);
   const res = json({ user: publicUser(u) });
   res.headers.append("set-cookie", sessionCookie(token, SESSION_DAYS * 86400));
@@ -161,6 +163,18 @@ export async function logout(req: Request, env: Env) {
   return res;
 }
 
+/**
+ * "Forgot your password?": marks the person so their admin sees the request on the Team page. The answer is the same
+ * whether or not the email has an account, so nobody can use it to find out who works here.
+ */
+export async function requestPasswordHelp(req: Request, env: Env) {
+  const b = await body<{ email?: string }>(req);
+  const email = String(b.email ?? "").trim();
+  if (!EMAIL.test(email) || email.length > 200) throw new HttpError(400, "Enter your email address");
+  await env.DB.prepare("UPDATE users SET reset_requested_at = ? WHERE email = ? AND disabled = 0").bind(now(), email).run();
+  return json({ ok: true });
+}
+
 export async function changePassword(req: Request, env: Env, u: UserRow) {
   const b = await body<{ current?: string; next?: string }>(req);
   const current = await pbkdf2(String(b.current ?? ""), unhex(u.pw_salt), u.pw_iters);
@@ -171,7 +185,7 @@ export async function changePassword(req: Request, env: Env, u: UserRow) {
   const token = cookieValue(req);
   // Sign out every other browser, keep this one.
   await env.DB.batch([
-    env.DB.prepare("UPDATE users SET pw_hash = ?, pw_salt = ?, pw_iters = ?, must_change = 0, updated_at = ? WHERE id = ?")
+    env.DB.prepare("UPDATE users SET pw_hash = ?, pw_salt = ?, pw_iters = ?, must_change = 0, reset_requested_at = NULL, updated_at = ? WHERE id = ?")
       .bind(h.pw_hash, h.pw_salt, h.pw_iters, now(), u.id),
     env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND id_hash != ?").bind(u.id, await sha256(token)),
   ]);
@@ -205,6 +219,14 @@ function checkBrand(c: Caller, brand: unknown): string {
 function checkRole(role: unknown): "staff" | "admin" {
   if (role !== "staff" && role !== "admin") throw new HttpError(400, "role must be staff or admin");
   return role;
+}
+
+/** How many people this admin manages are waiting on a new password (0 for staff), for the Team link. */
+export async function resetRequests(env: Env, u: UserRow) {
+  if (u.role !== "admin") return 0;
+  const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE reset_requested_at IS NOT NULL AND disabled = 0 AND (? = '*' OR brand = ?)")
+    .bind(u.brand, u.brand).first<{ n: number }>();
+  return r?.n ?? 0;
 }
 
 export async function listUsers(env: Env, c: Caller) {
@@ -261,7 +283,7 @@ export async function resetPassword(env: Env, c: Caller, id: string) {
   const password = tempPassword();
   const h = await hashPassword(password);
   await env.DB.batch([
-    env.DB.prepare("UPDATE users SET pw_hash = ?, pw_salt = ?, pw_iters = ?, must_change = 1, failed_logins = 0, locked_until = NULL, updated_at = ? WHERE id = ?")
+    env.DB.prepare("UPDATE users SET pw_hash = ?, pw_salt = ?, pw_iters = ?, must_change = 1, failed_logins = 0, locked_until = NULL, reset_requested_at = NULL, updated_at = ? WHERE id = ?")
       .bind(h.pw_hash, h.pw_salt, h.pw_iters, now(), u.id),
     env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(u.id),
   ]);
