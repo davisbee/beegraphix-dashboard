@@ -103,7 +103,7 @@ function shell(page, inner) {
     : "";
   app.innerHTML = `
     <header class="topbar"><div class="topbar-in">
-      <a href="#/videos" aria-label="Videos"><img class="logo" src="${BRAND_INFO[state.brand].logo}" alt="${esc(brandName(state.brand))}"></a>
+      <a href="#/videos" class="home" aria-label="Content Factory, Videos"><img class="logo" src="${BRAND_INFO[state.brand].logo}" alt="${esc(brandName(state.brand))}"><span class="appname">Content Factory</span></a>
       <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}${id === "new" ? "?fresh" : ""}" ${page === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav>
       <div class="who">${brandPick}<span>${esc(state.me.name)}</span><button class="linkbtn" id="signout">Sign out</button></div>
     </div></header>
@@ -126,9 +126,10 @@ function showLogin(message) {
   app.innerHTML = `
     <div class="login"><div class="login-in">
       <img class="logo" src="${BRAND_INFO[b].logo}" alt="${esc(BRAND_INFO[b].name)}">
+      <div class="appname">Content Factory</div>
       <form class="card" id="loginForm" novalidate>
       <h1>Sign in</h1>
-      <p class="muted small" style="margin:0 0 20px">Content Factory. Plan, build and post your brand's videos.</p>
+      <p class="muted small" style="margin:0 0 20px">Plan, build and post your brand's videos.</p>
       <div id="err">${message ? `<div class="error">${esc(message)}</div>` : ""}</div>
       <div class="field"><label for="email">Email</label><input type="email" id="email" autocomplete="username" required></div>
       <div class="field"><label for="password">Password</label><input type="password" id="password" autocomplete="current-password" required></div>

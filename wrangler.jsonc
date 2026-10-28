@@ -15,7 +15,10 @@
       "migrations_dir": "migrations"
     }
   ],
-  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "content-factory-media" }]
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "content-factory-media" }],
+  // Staff use contentfactory.shopbgx.com; the workers.dev address stays on for AI-DESKTOP's DASHBOARD_URL.
+  "routes": [{ "pattern": "contentfactory.shopbgx.com", "custom_domain": true }],
+  "workers_dev": true
   // Secrets (set with `wrangler secret put` or in the Cloudflare dashboard, never in git):
   //   WORKER_TOKEN   the token AI-DESKTOP uses to pick up jobs
   //   SUBMIT_TOKENS  JSON {"<token>": "beegraphix" | "rugbee" | "*"}: who may submit and see jobs, per brand
