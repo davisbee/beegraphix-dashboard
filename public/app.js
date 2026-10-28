@@ -104,7 +104,7 @@ function shell(page, inner) {
   app.innerHTML = `
     <header class="topbar"><div class="topbar-in">
       <a href="#/videos" aria-label="Videos"><img class="logo" src="${BRAND_INFO[state.brand].logo}" alt="${esc(brandName(state.brand))}"></a>
-      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}" ${page === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav>
+      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}${id === "new" ? "?fresh" : ""}" ${page === id ? 'aria-current="page"' : ""}>${label}</a>`).join("")}</nav>
       <div class="who">${brandPick}<span>${esc(state.me.name)}</span><button class="linkbtn" id="signout">Sign out</button></div>
     </div></header>
     <main>${inner}</main>`;
@@ -503,13 +503,9 @@ async function pageNew(params = new URLSearchParams()) {
     else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
     else if (el.name === "winner") v.winner = Number(el.value);
     else if (el.name === "template") {
-      // Products and programs (FAN Fundraiser, stores) don't mix: each keeps its own boxes, so switching never carries a shirt into a program.
-      const kindOf = (id) => (state.formats.find((x) => x.id === id)?.products.style === false ? "programs" : "products");
-      const was = kindOf(v.template), now = kindOf(el.value);
-      if (was !== now) {
-        v.shelf = { ...(v.shelf || {}), [was]: v.products };
-        v.products = v.shelf[now]?.length === 5 ? v.shelf[now] : blankVideo().products;
-      }
+      // Each format keeps its own products: switching never carries a Top 5 shirt into a Product Spotlight (or a program).
+      v.shelf = { ...(v.shelf || {}), [v.template]: v.products };
+      v.products = v.shelf[el.value]?.length === 5 ? v.shelf[el.value] : blankVideo().products;
       v.template = el.value; save(); return pageNew(); // redraw for the new format
     }
     else return;
