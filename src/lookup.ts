@@ -242,7 +242,7 @@ async function ssSearch(env: Env, typed: string): Promise<SsStyle[]> {
 interface Color { name: string; image: string; swatch: string }
 interface Found { name: string; style: string; images: string[]; from: string; exact: boolean; colors: () => Promise<Color[]> }
 
-const MAX_COLORS = 80;
+const MAX_COLORS = 250;
 /** One entry per color name, in the supplier's order. */
 function uniqueColors(list: Color[]) {
   const seen = new Set<string>();
@@ -357,13 +357,14 @@ export async function lookupStyle(req: Request, env: Env, c: Caller, brand: stri
     throw new HttpError(404, `Couldn't find style ${typed} at ${asks.length > 1 ? "S&S or SanMar" : env.SS_ACCOUNT ? "S&S" : "SanMar"}. Check the number, or fill this product in by hand.`);
   }
 
+  // The color list and the photo come from different calls, so fetch them side by side.
+  const colorsP = hit.colors().catch((e) => { console.error("style colors", e); return [] as Color[]; });
   let photo = null;
   for (const u of new Set(hit.images)) {
     try { photo = await savePhoto(env, c, brand, u, hit.style || "product"); } catch (e) { console.error("style image", e); }
     if (photo) break;
   }
-  let colors: Color[] = [];
-  try { colors = await hit.colors(); } catch (e) { console.error("style colors", e); }
+  const colors = await colorsP;
   const name = decode(hit.name).replace(/\s+/g, " ").trim().slice(0, 120);
   return json({ name, style: hit.style.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 20), photo, colors, from: hit.from });
 }
