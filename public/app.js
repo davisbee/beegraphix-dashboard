@@ -515,6 +515,7 @@ async function pageNew() {
       const got = [];
       if (r.name && open(p.name, auto.name)) { p.name = r.name; got.push("name"); }
       if (r.style && open(p.style, auto.style)) { p.style = r.style; got.push("style number"); }
+      else if (r.style && p.style.replace(/[^a-z0-9]/gi, "").toUpperCase() === r.style.replace(/[^A-Z0-9]/g, "")) p.style = r.style;
       if (r.photo && (!p.photo || p.photo === auto.photo)) { p.photo = r.photo.id; p.photoName = r.photo.name; got.push("photo"); }
       p.auto = { name: r.name ? p.name : auto.name, style: r.style ? p.style : auto.style, photo: r.photo ? p.photo : auto.photo };
       save();
@@ -533,12 +534,14 @@ async function pageNew() {
     const box = form.querySelector(`[data-colors="${i}"]`);
     box.hidden = !p.colors?.length;
     if (box.hidden) return;
-    box.innerHTML = `<div class="small muted">Color in the video: <b data-colorname>${esc(p.color || "pick one")}</b></div><div class="swatches">${p.colors.map((c, n) =>
-      `<button type="button" class="swatch${c.name === p.color ? " on" : ""}" data-color="${n}" title="${esc(c.name)}" aria-label="${esc(c.name)}">${c.swatch ? `<img src="${esc(c.swatch)}" alt="" loading="lazy">` : esc(c.name.slice(0, 3))}</button>`).join("")}</div>`;
-    box.querySelectorAll("[data-color]").forEach((b) => b.onclick = async () => {
-      const c = p.colors[+b.dataset.color];
-      const label = $("[data-colorname]", box);
-      label.textContent = `Getting ${c.name}…`;
+    box.innerHTML = `<label class="small muted" for="pc${i}">Color in the video</label><select id="pc${i}" data-colorpick><option value="">Pick a color (${p.colors.length})</option>${p.colors.map((c, n) =>
+      `<option value="${n}"${c.name === p.color ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select><span class="small muted" data-colorstate></span>`;
+    const pick = $("[data-colorpick]", box);
+    const stateEl = $("[data-colorstate]", box);
+    pick.onchange = async () => {
+      if (pick.value === "") return;
+      const c = p.colors[+pick.value];
+      stateEl.textContent = `Getting ${c.name}…`;
       busy.add(`color${i}`);
       try {
         const r = await api("POST", `/api/lookup/image?brand=${state.brand}`, { url: c.image });
@@ -548,9 +551,9 @@ async function pageNew() {
         p.auto = { ...(p.auto || {}), photo: p.photo };
         save();
         slotUi[`photo${i}`].show();
-        showColors(i);
-      } catch (err) { label.innerHTML = `<span class="bad">${esc(err.message)}</span>`; } finally { busy.delete(`color${i}`); }
-    });
+        stateEl.textContent = "";
+      } catch (err) { stateEl.innerHTML = `<span class="bad">${esc(err.message)}</span>`; } finally { busy.delete(`color${i}`); }
+    };
   };
   v.products.forEach((_, i) => showColors(i));
   const lookup = (i) => {
