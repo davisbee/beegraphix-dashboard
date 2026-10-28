@@ -1,30 +1,33 @@
-// Content Factory Dashboard: job queue API (stage 2).
+// Content Factory Dashboard: the web app staff sign in to, and the job queue AI-DESKTOP pulls from.
 //
-// Staff (later: the dashboard) submit video jobs; AI-DESKTOP polls for work, renders with the job's
-// brand kit and uploads the finished MP4 here. The desktop only ever calls out, so nothing on the
-// office network is exposed. Every job belongs to one brand and a brand token only sees its own jobs.
+// Staff sign in (see auth.ts) or a script uses one of the SUBMIT_TOKENS; AI-DESKTOP polls for work,
+// renders with the job's brand kit and uploads the finished MP4 here. The desktop only ever calls out,
+// so nothing on the office network is exposed. Every job belongs to one brand and a person or token
+// only sees their own brand's jobs ("*" sees every brand). The screens are static files in public/.
 //
-//   Submit side (Authorization: Bearer <one of SUBMIT_TOKENS>)
+//   Staff (session cookie, or Authorization: Bearer <one of SUBMIT_TOKENS>)
+//     POST /api/login {email, password}   POST /api/logout   GET /api/me   POST /api/me/password {current, next}
+//     GET  /api/catalog               campaigns and variants on the desktop
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job
-//     GET  /api/jobs                  latest jobs for the token's brand
+//     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
-//     GET  /api/jobs/:id/video        the finished MP4
+//     GET  /api/jobs/:id/video        the finished MP4 (Range requests; ?download for a file)
+//     GET/POST /api/users, POST /api/users/:id, POST /api/users/:id/reset   Team page (admins)
 //
-//   Desktop side (Authorization: Bearer <WORKER_TOKEN>)
+//   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
+//     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}]}
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
 //     POST /api/desktop/jobs/:id/upload/start     -> starts an R2 multipart upload
 //     PUT  /api/desktop/jobs/:id/upload/part?n=1  raw bytes of one part (5 MB minimum except the last)
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
 
-export interface Env {
-  DB: D1Database;
-  MEDIA: R2Bucket;
-  WORKER_TOKEN: string;
-  SUBMIT_TOKENS: string;
-}
+import { BRANDS, HttpError, body, json, now, type Env } from "./common";
+import {
+  callerFor, changePassword, createUser, listUsers, login, logout, publicUser, resetPassword, sameString, sessionUser, updateUser, type Caller,
+} from "./auth";
 
 type Status = "queued" | "claimed" | "rendering" | "uploading" | "done" | "failed" | "cancelled";
 
@@ -48,63 +51,39 @@ interface JobRow {
   finished_at: string | null;
 }
 
-export const BRANDS = ["beegraphix", "rugbee"] as const;
 const ACTIVE: Status[] = ["claimed", "rendering", "uploading"];
 // A claimed job whose desktop has gone quiet this long goes back in line (or fails after MAX_ATTEMPTS).
 const STALE_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
 
-class HttpError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-  }
-}
-
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
-
-const now = () => new Date().toISOString();
-
-// Constant-time compare so a token can't be guessed one character at a time.
-function sameToken(a: string, b: string) {
-  const enc = new TextEncoder();
-  const x = enc.encode(a);
-  const y = enc.encode(b);
-  let diff = x.length ^ y.length;
-  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
-  return diff === 0;
-}
-
 function bearer(req: Request) {
   const m = (req.headers.get("authorization") ?? "").match(/^Bearer\s+(\S+)$/i);
   return m?.[1] ?? "";
 }
 
-/** Brand the caller may act for ("*" = every brand), or a 401. */
-function submitScope(req: Request, env: Env): string {
+/** A script holding one of the SUBMIT_TOKENS, or a signed-in person. Otherwise a 401. */
+async function caller(req: Request, env: Env): Promise<Caller> {
   const token = bearer(req);
-  let map: Record<string, string> = {};
-  try {
-    map = JSON.parse(env.SUBMIT_TOKENS || "{}");
-  } catch {
-    throw new HttpError(500, "SUBMIT_TOKENS is not valid JSON");
+  if (token) {
+    let map: Record<string, string> = {};
+    try {
+      map = JSON.parse(env.SUBMIT_TOKENS || "{}");
+    } catch {
+      throw new HttpError(500, "SUBMIT_TOKENS is not valid JSON");
+    }
+    for (const [t, scope] of Object.entries(map)) if (t.length >= 24 && sameString(token, t)) return { brand: scope, admin: scope === "*", label: scope === "*" ? "admin" : scope };
+    throw new HttpError(401, "Unauthorized");
   }
-  if (token) for (const [t, scope] of Object.entries(map)) if (t.length >= 24 && sameToken(token, t)) return scope;
-  throw new HttpError(401, "Unauthorized");
+  const u = await sessionUser(req, env);
+  if (!u) throw new HttpError(401, "Please sign in");
+  if (u.must_change) throw new HttpError(403, "Set a new password first");
+  return callerFor(u);
 }
 
 function requireDesktop(req: Request, env: Env) {
   const token = bearer(req);
-  if (!env.WORKER_TOKEN || env.WORKER_TOKEN.length < 24 || !token || !sameToken(token, env.WORKER_TOKEN)) throw new HttpError(401, "Unauthorized");
-}
-
-async function body<T>(req: Request): Promise<T> {
-  try {
-    return (await req.json()) as T;
-  } catch {
-    throw new HttpError(400, "Body must be JSON");
-  }
+  if (!env.WORKER_TOKEN || env.WORKER_TOKEN.length < 24 || !token || !sameString(token, env.WORKER_TOKEN)) throw new HttpError(401, "Unauthorized");
 }
 
 function publicJob(j: JobRow) {
@@ -148,11 +127,11 @@ async function activeJob(env: Env, id: string) {
 
 // ---------- submit side ----------
 
-async function createJob(req: Request, env: Env, scope: string) {
+async function createJob(req: Request, env: Env, c: Caller) {
   const b = await body<{ brand?: string; campaign?: string; variant?: string; draft?: boolean }>(req);
-  const brand = scope === "*" ? b.brand : scope;
+  const brand = c.brand === "*" ? b.brand : c.brand;
   if (!brand || !(BRANDS as readonly string[]).includes(brand)) throw new HttpError(400, `brand must be one of ${BRANDS.join(", ")}`);
-  if (scope !== "*" && b.brand && b.brand !== scope) throw new HttpError(403, "This token can only submit jobs for its own brand");
+  if (c.brand !== "*" && b.brand && b.brand !== c.brand) throw new HttpError(403, "You can only submit jobs for your own brand");
   if (!b.campaign || !SLUG.test(b.campaign)) throw new HttpError(400, "campaign must be a campaign id (lowercase letters, numbers, dashes)");
   if (!b.variant || !SLUG.test(b.variant)) throw new HttpError(400, "variant must be a variant id (lowercase letters, numbers, dashes)");
   const id = crypto.randomUUID();
@@ -160,21 +139,23 @@ async function createJob(req: Request, env: Env, scope: string) {
   const payload = JSON.stringify({ campaign: b.campaign, variant: b.variant, draft: !!b.draft });
   await env.DB.prepare(
     "INSERT INTO jobs (id, brand, kind, payload, status, message, created_by, created_at, updated_at) VALUES (?, ?, 'render', ?, 'queued', 'Waiting for the desktop', ?, ?, ?)",
-  ).bind(id, brand, payload, scope === "*" ? "admin" : scope, t, t).run();
+  ).bind(id, brand, payload, c.label, t, t).run();
   return json(publicJob((await getJob(env, id))!), 201);
 }
 
-async function listJobs(url: URL, env: Env, scope: string) {
+async function listJobs(url: URL, env: Env, c: Caller) {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 1), 200);
-  const rows =
-    scope === "*"
-      ? await env.DB.prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?").bind(limit).all<JobRow>()
-      : await env.DB.prepare("SELECT * FROM jobs WHERE brand = ? ORDER BY created_at DESC LIMIT ?").bind(scope, limit).all<JobRow>();
+  // Someone who sees every brand can narrow the list to one.
+  const want = url.searchParams.get("brand");
+  const brand = c.brand !== "*" ? c.brand : want && (BRANDS as readonly string[]).includes(want) ? want : null;
+  const rows = brand
+    ? await env.DB.prepare("SELECT * FROM jobs WHERE brand = ? ORDER BY created_at DESC LIMIT ?").bind(brand, limit).all<JobRow>()
+    : await env.DB.prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?").bind(limit).all<JobRow>();
   return json({ jobs: rows.results.map(publicJob) });
 }
 
-async function cancelJob(env: Env, scope: string, id: string) {
-  await visibleJob(env, scope, id);
+async function cancelJob(env: Env, c: Caller, id: string) {
+  await visibleJob(env, c.brand, id);
   const t = now();
   const r = await env.DB.prepare("UPDATE jobs SET status = 'cancelled', message = 'Cancelled', updated_at = ?, finished_at = ? WHERE id = ? AND status = 'queued'")
     .bind(t, t, id).run();
@@ -182,18 +163,69 @@ async function cancelJob(env: Env, scope: string, id: string) {
   return json(publicJob((await getJob(env, id))!));
 }
 
-async function video(env: Env, scope: string, id: string) {
-  const j = await visibleJob(env, scope, id);
+/** Streams the MP4. Supports Range requests so the browser's player can seek (Safari needs this). */
+async function video(req: Request, url: URL, env: Env, c: Caller, id: string) {
+  const j = await visibleJob(env, c.brand, id);
   if (j.status !== "done" || !j.output_key) throw new HttpError(409, "The video isn't ready yet");
+  const head = await env.MEDIA.head(j.output_key);
+  if (!head) throw new HttpError(404, "Video file missing");
+  const size = head.size;
+  const headers: Record<string, string> = {
+    "content-type": "video/mp4",
+    "accept-ranges": "bytes",
+    "content-disposition": `${url.searchParams.has("download") ? "attachment" : "inline"}; filename="${j.brand}-${JSON.parse(j.payload).campaign ?? "video"}-${j.id.slice(0, 8)}.mp4"`,
+    "cache-control": "private, no-store",
+  };
+  const m = (req.headers.get("range") ?? "").match(/^bytes=(\d*)-(\d*)$/);
+  if (m && (m[1] || m[2])) {
+    let start = m[1] ? parseInt(m[1], 10) : Math.max(size - parseInt(m[2], 10), 0);
+    let end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+    if (start >= size || start > end) return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+    const obj = await env.MEDIA.get(j.output_key, { range: { offset: start, length: end - start + 1 } });
+    if (!obj) throw new HttpError(404, "Video file missing");
+    return new Response(obj.body, { status: 206, headers: { ...headers, "content-length": String(end - start + 1), "content-range": `bytes ${start}-${end}/${size}` } });
+  }
   const obj = await env.MEDIA.get(j.output_key);
   if (!obj) throw new HttpError(404, "Video file missing");
-  return new Response(obj.body, {
-    headers: {
-      "content-type": "video/mp4",
-      "content-length": String(obj.size),
-      "content-disposition": `inline; filename="${j.brand}-${j.id}.mp4"`,
-      "cache-control": "private, no-store",
-    },
+  return new Response(obj.body, { headers: { ...headers, "content-length": String(size) } });
+}
+
+// ---------- catalog: campaigns the desktop can render ----------
+
+interface CatalogEntry {
+  brand: string;
+  campaign: string;
+  title: string;
+  variants: Array<{ id: string; label: string }>;
+}
+
+/** The desktop reports every campaign on the PC; this replaces the whole list. */
+async function putCatalog(req: Request, env: Env) {
+  const b = await body<{ campaigns?: CatalogEntry[] }>(req);
+  if (!Array.isArray(b.campaigns) || b.campaigns.length > 500) throw new HttpError(400, "campaigns must be a list");
+  const t = now();
+  const rows = b.campaigns
+    .filter((c) => (BRANDS as readonly string[]).includes(c.brand) && SLUG.test(c.campaign ?? "") && Array.isArray(c.variants))
+    .map((c) => ({
+      brand: c.brand,
+      campaign: c.campaign,
+      title: String(c.title ?? c.campaign).slice(0, 200),
+      variants: c.variants.filter((v) => SLUG.test(v?.id ?? "")).slice(0, 50).map((v) => ({ id: v.id, label: String(v.label ?? v.id).slice(0, 200) })),
+    }));
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM catalog"),
+    ...rows.map((r) => env.DB.prepare("INSERT INTO catalog (brand, campaign, title, variants, updated_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(r.brand, r.campaign, r.title, JSON.stringify(r.variants), t)),
+  ]);
+  return json({ ok: true, campaigns: rows.length });
+}
+
+async function getCatalog(env: Env, c: Caller) {
+  const rows = c.brand === "*"
+    ? await env.DB.prepare("SELECT * FROM catalog ORDER BY brand, title").all<{ brand: string; campaign: string; title: string; variants: string; updated_at: string }>()
+    : await env.DB.prepare("SELECT * FROM catalog WHERE brand = ? ORDER BY title").bind(c.brand).all<{ brand: string; campaign: string; title: string; variants: string; updated_at: string }>();
+  return json({
+    campaigns: rows.results.map((r) => ({ brand: r.brand, campaign: r.campaign, title: r.title, variants: JSON.parse(r.variants), updatedAt: r.updated_at })),
   });
 }
 
@@ -291,11 +323,13 @@ async function route(req: Request, env: Env): Promise<Response> {
   const p = url.pathname.replace(/\/+$/, "") || "/";
   const m = req.method;
 
-  if (p === "/" || p === "/api/health") return json({ ok: true, service: "content-factory-dashboard" });
+  if (!p.startsWith("/api/")) return env.ASSETS.fetch(req);
+  if (p === "/api/health") return json({ ok: true, service: "content-factory-dashboard" });
 
   if (p.startsWith("/api/desktop/")) {
     requireDesktop(req, env);
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
+    if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
     const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|upload\/start|upload\/part|upload\/complete)$/);
     if (d) {
       const [, id, action] = d;
@@ -308,17 +342,34 @@ async function route(req: Request, env: Env): Promise<Response> {
     throw new HttpError(404, "Not found");
   }
 
-  if (p === "/api/jobs" || p.startsWith("/api/jobs/")) {
-    const scope = submitScope(req, env);
-    if (p === "/api/jobs" && m === "POST") return createJob(req, env, scope);
-    if (p === "/api/jobs" && m === "GET") return listJobs(url, env, scope);
-    const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video))?$/);
-    if (s) {
-      const [, id, action] = s;
-      if (!action && m === "GET") return json(publicJob(await visibleJob(env, scope, id)));
-      if (action === "cancel" && m === "POST") return cancelJob(env, scope, id);
-      if (action === "video" && m === "GET") return video(env, scope, id);
-    }
+  // Signing in, and a person's own account (allowed while they still have a temporary password).
+  if (p === "/api/login" && m === "POST") return login(req, env);
+  if (p === "/api/logout" && m === "POST") return logout(req, env);
+  if (p === "/api/me" || p === "/api/me/password") {
+    const u = await sessionUser(req, env);
+    if (!u) throw new HttpError(401, "Please sign in");
+    if (p === "/api/me" && m === "GET") return json({ user: publicUser(u), brands: u.brand === "*" ? BRANDS : [u.brand] });
+    if (p === "/api/me/password" && m === "POST") return changePassword(req, env, u);
+    throw new HttpError(404, "Not found");
+  }
+
+  const c = await caller(req, env);
+
+  if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
+
+  if (p === "/api/users" && m === "GET") return listUsers(env, c);
+  if (p === "/api/users" && m === "POST") return createUser(req, env, c);
+  const um = p.match(/^\/api\/users\/([0-9a-f-]{36})(?:\/(reset))?$/);
+  if (um && m === "POST") return um[2] ? resetPassword(env, c, um[1]) : updateUser(req, env, c, um[1]);
+
+  if (p === "/api/jobs" && m === "POST") return createJob(req, env, c);
+  if (p === "/api/jobs" && m === "GET") return listJobs(url, env, c);
+  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video))?$/);
+  if (s) {
+    const [, id, action] = s;
+    if (!action && m === "GET") return json(publicJob(await visibleJob(env, c.brand, id)));
+    if (action === "cancel" && m === "POST") return cancelJob(env, c, id);
+    if (action === "video" && m === "GET") return video(req, url, env, c, id);
   }
   throw new HttpError(404, "Not found");
 }
