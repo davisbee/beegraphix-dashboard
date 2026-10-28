@@ -91,7 +91,12 @@ and Secrets), never in git:
 - D1 database `content-factory` (people, sessions, jobs and the campaign list; `migrations/`)
 - R2 bucket `content-factory-media` (finished videos under `outputs/<brand>/<job>.mp4`)
 
-`npm run deploy` applies new database migrations, then deploys the Worker.
+Deploys are automatic: Cloudflare builds and deploys every push to `main` (Workers Builds, deploy
+command `npx wrangler deploy`). Preview builds are off because they would share the live database.
+
+That only ships code. A PR that adds a file to `migrations/` also needs
+`npx wrangler d1 migrations apply content-factory --remote` run once, before or right after it merges.
+`npm run deploy` still does both by hand.
 
 ## Working on it
 
