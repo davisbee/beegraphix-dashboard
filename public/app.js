@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/new, #/render, #/team, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/new, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -95,7 +95,7 @@ function shell(page, inner) {
     ["videos", "Videos"],
     ["new", "New video"],
     ["render", "Render again"],
-    ...(state.me.role === "admin" ? [["team", "Team"]] : []),
+    ...(state.me.role === "admin" ? [["team", "Team"], ["avatar", "AI avatar"]] : []),
     ["account", "Account"],
   ];
   const brandPick = state.brands.length > 1
@@ -1092,6 +1092,85 @@ async function pageTeam() {
 
 // ---------- account ----------
 
+// ---------- AI avatar (admins): pick the HeyGen look, make a test clip ----------
+
+const lookImg = (l) => (l.preview ? `<img src="/api/heygen/preview?u=${encodeURIComponent(l.preview)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'noimg'}))">` : '<div class="noimg"></div>');
+
+async function pageAvatar() {
+  if (state.me.role !== "admin") { location.hash = "#/videos"; return; }
+  shell("avatar", `${header("Setup", "AI avatar", "Pick the HeyGen look that AI-avatar videos use, then make one short test clip to check it.")}
+    <div id="keyNote"></div>
+    <div class="card"><h2>Your look</h2><div id="chosen"><p class="muted">Loading…</p></div></div>
+    <div class="card"><h2>Pick a look</h2><p class="muted small" style="margin:0 0 16px">Your own avatars from HeyGen. Stock avatars aren't shown.</p>
+      <div id="looks"><button class="btn outline" type="button" id="loadLooks">Show My Looks</button></div></div>
+    <div class="card"><h2>Test clip</h2>
+      <p class="muted small" style="margin:0 0 16px">One sentence, about 8 seconds. It uses HeyGen credits. "Clear background" is what the factory wants; if HeyGen says your look can't do it, try green.</p>
+      <div class="row"><button class="btn" type="button" data-test="clear">Make Test Clip</button><button class="btn outline" type="button" data-test="green">Try Green Background</button></div>
+      <div id="testOut" style="margin-top:16px"></div></div>`);
+
+  let info = await api("GET", "/api/heygen");
+  if (!info.ready) $("#keyNote").innerHTML = `<div class="notice"><b>HeyGen isn't connected yet.</b> Add <code>HEYGEN_API_KEY</code> as a secret on the content-factory-dashboard Worker in Cloudflare.</div>`;
+
+  const showChosen = () => {
+    const l = info.choice;
+    $("#chosen").innerHTML = l
+      ? `<div class="looks"><div class="look on">${lookImg(l)}<div class="meta"><b>${esc(l.name)}</b>${l.type ? `<span class="small muted">${esc(l.type)}</span>` : ""}</div></div></div>`
+      : `<p class="muted">None picked yet.</p>`;
+    document.querySelectorAll("[data-test]").forEach((b) => { b.disabled = !l || !info.ready; });
+  };
+
+  const showTest = () => {
+    const t = info.test;
+    const out = $("#testOut");
+    stopTimer();
+    if (!t) { out.innerHTML = ""; return; }
+    const kind = t.mode === "green" ? "green background" : "clear background";
+    if (t.saved) {
+      out.innerHTML = `<p class="small" style="margin:0 0 10px"><b>Done</b> (${kind}). The squares show through anywhere the background is clear.</p>
+        <div class="checker"><video controls playsinline src="/api/heygen/test/video?v=${encodeURIComponent(t.saved)}"></video></div>`;
+      return;
+    }
+    if (t.status === "failed") { out.innerHTML = `<div class="notice"><b>The test clip failed</b> (${kind}).<br>${esc(t.message || "HeyGen didn't say why.")}</div>`; return; }
+    out.innerHTML = `<p class="small muted" style="margin:0">HeyGen is making the ${kind} clip (${esc(t.status)}). This usually takes a few minutes. You can leave this page.</p>`;
+    state.timer = setTimeout(async () => {
+      try { info.test = (await api("GET", "/api/heygen/test/refresh")).test; showTest(); }
+      catch (e) { out.innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+    }, 10000);
+  };
+
+  showChosen();
+  showTest();
+
+  const loadLooks = async () => {
+    $("#looks").innerHTML = `<p class="muted">Loading…</p>`;
+    try {
+      const { looks } = await api("GET", "/api/heygen/looks");
+      if (!looks.length) { $("#looks").innerHTML = `<p class="muted">HeyGen didn't return any looks of your own.</p>`; return; }
+      $("#looks").innerHTML = `<div class="looks">${looks.map((l, i) => `<div class="look ${info.choice?.id === l.id ? "on" : ""}">${lookImg(l)}
+        <div class="meta"><b>${esc(l.name)}</b>${l.type ? `<span class="small muted">${esc(l.type)}</span>` : ""}
+        <button class="btn small" type="button" data-pick="${i}">${info.choice?.id === l.id ? "In Use" : "Use This"}</button></div></div>`).join("")}</div>`;
+      document.querySelectorAll("[data-pick]").forEach((b) => {
+        b.onclick = async () => {
+          const l = looks[Number(b.dataset.pick)];
+          try { info.choice = (await api("PUT", "/api/heygen/choice", l)).choice; info.test = null; showChosen(); showTest(); loadLooks(); }
+          catch (e) { alert(e.message); }
+        };
+      });
+    } catch (e) { $("#looks").innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+  };
+  $("#loadLooks").onclick = loadLooks;
+
+  document.querySelectorAll("[data-test]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm("Make a test clip? It uses HeyGen credits.")) return;
+      b.disabled = true;
+      try { info.test = (await api("POST", "/api/heygen/test", { mode: b.dataset.test })).test; showTest(); }
+      catch (e) { $("#testOut").innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
+      finally { b.disabled = false; }
+    };
+  });
+}
+
 function pageAccount(forced) {
   const inner = `${header(brandName(state.me.brand), forced ? "Pick Your Password" : "Account", forced ? "You signed in with a temporary password. Choose your own to keep going." : `${state.me.name} · ${state.me.email}`)}
     <form class="card" id="pwForm" style="max-width:520px"><h2>${forced ? "New password" : "Change password"}</h2><div id="err"></div>
@@ -1129,6 +1208,7 @@ function route() {
   if (parts[0] === "render") return pageRender(params).catch(fail);
   if (parts[0] === "new") return pageNew(params).catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
+  if (parts[0] === "avatar") return pageAvatar().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
   return pageVideos().catch(fail);
 }
