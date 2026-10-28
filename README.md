@@ -49,7 +49,7 @@ whose campaign is painted with a different brand kit.
 
 | Who | Call | What it does |
 |---|---|---|
-| anyone | `POST /api/login`, `POST /api/logout`, `GET /api/me`, `POST /api/me/password`, `POST /api/password-help` | signing in, and "Forgot your password?" (the request shows on the Team page with a one-click reset; there is no email sending) |
+| anyone | `POST /api/login`, `POST /api/logout`, `GET /api/me`, `POST /api/me/password`, `POST /api/password-help`, `POST /api/password-reset` | signing in, and "Forgot your password?": emails a one-time link good for an hour (Resend, `RESEND_API_KEY`); without that key, or if the email fails, the request shows on the Team page with a one-click reset |
 | staff (signed in, or `SUBMIT_TOKENS`) | `POST /api/jobs` `{campaign, variant, draft?, brand?}` | queue a render |
 | | `GET /api/jobs`, `GET /api/jobs/:id` | status |
 | | `POST /api/jobs/:id/cancel` | cancel while still queued |

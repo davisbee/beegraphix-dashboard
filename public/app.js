@@ -152,7 +152,7 @@ function showLogin(message) {
   };
 }
 
-// "Forgot your password?": there's no email sending yet, so the request goes to the admins' Team page instead.
+// "Forgot your password?": emails a reset link, or (before email is set up) asks the admins on the Team page.
 function showForgot(email = "") {
   const b = document.body.dataset.brand;
   app.innerHTML = `
@@ -161,7 +161,7 @@ function showForgot(email = "") {
       <div class="appname">Content Factory</div>
       <form class="card" id="forgotForm" novalidate>
       <h1>Reset your password</h1>
-      <p class="muted small" style="margin:0 0 20px">Enter the email you sign in with. Your admin gets the request and sends you a new temporary password.</p>
+      <p class="muted small" style="margin:0 0 20px">Enter the email you sign in with and we'll help you pick a new password.</p>
       <div id="err"></div>
       <div class="field"><label for="email">Email</label><input type="email" id="email" autocomplete="username" required value="${esc(email)}"></div>
       <button class="btn" type="submit">Ask for a New Password</button>
@@ -174,11 +174,52 @@ function showForgot(email = "") {
     const btn = e.target.querySelector("button");
     btn.disabled = true;
     try {
-      await api("POST", "/api/password-help", { email: $("#email").value });
-      $("#forgotForm").innerHTML = `<h1>Request sent</h1>
-        <p class="muted" style="margin:0 0 20px">If that email has an account, your admin will see your request and send you a new temporary password. You'll pick your own when you sign in with it.</p>
-        <button class="btn" type="button" id="back2">Back to Sign In</button>`;
+      const r = await api("POST", "/api/password-help", { email: $("#email").value });
+      $("#forgotForm").innerHTML = r.via === "email"
+        ? `<h1>Check your email</h1>
+        <p class="muted" style="margin:0 0 20px">If that email has an account, we've sent it a link to pick a new password. The link works for an hour. Not there? Check your spam folder.</p>`
+        : `<h1>Request sent</h1>
+        <p class="muted" style="margin:0 0 20px">If that email has an account, your admin will see your request and send you a new temporary password. You'll pick your own when you sign in with it.</p>`;
+      $("#forgotForm").insertAdjacentHTML("beforeend", `
+<button class="btn" type="button" id="back2">Back to Sign In</button>`);
       $("#back2").onclick = () => showLogin();
+    } catch (err) {
+      $("#err").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      btn.disabled = false;
+    }
+  };
+}
+
+// The page the emailed reset link opens (#/reset?token=…), before anyone is signed in.
+function showReset(token) {
+  stopTimer();
+  paint(recall("brand") || "beegraphix");
+  const b = document.body.dataset.brand;
+  app.innerHTML = `
+    <div class="login"><div class="login-in">
+      <img class="logo" src="${BRAND_INFO[b].logo}" alt="${esc(BRAND_INFO[b].name)}">
+      <div class="appname">Content Factory</div>
+      <form class="card" id="resetForm" novalidate>
+      <h1>Pick a new password</h1>
+      <p class="muted small" style="margin:0 0 20px">At least 10 characters. You'll be signed out everywhere else.</p>
+      <div id="err"></div>
+      <div class="field"><label for="next">New password</label><input type="password" id="next" autocomplete="new-password" required></div>
+      <div class="field"><label for="again">New password again</label><input type="password" id="again" autocomplete="new-password" required></div>
+      <button class="btn" type="submit">Save Password</button>
+      <p class="small" style="margin:16px 0 0"><a href="#" id="back">Back to sign in</a></p>
+    </form></div></div>`;
+  $("#next").focus();
+  const toLogin = (msg) => { history.replaceState(null, "", location.pathname); showLogin(msg); };
+  $("#back").onclick = (e) => { e.preventDefault(); toLogin(); };
+  $("#resetForm").onsubmit = async (e) => {
+    e.preventDefault();
+    if ($("#next").value !== $("#again").value) { $("#err").innerHTML = `<div class="error">The two passwords don't match</div>`; return; }
+    const btn = e.target.querySelector("button");
+    btn.disabled = true;
+    try {
+      await api("POST", "/api/password-reset", { token, next: $("#next").value });
+      toLogin();
+      $("#err").innerHTML = `<div class="notice">Password saved. Sign in with your new one.</div>`;
     } catch (err) {
       $("#err").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       btn.disabled = false;
@@ -1092,6 +1133,8 @@ function route() {
 }
 
 async function start() {
+  const reset = location.hash.match(/^#\/reset\?token=([0-9a-f]{64})$/);
+  if (reset) return showReset(reset[1]);
   try {
     const r = await api("GET", "/api/me");
     state.me = r.user;

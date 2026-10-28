@@ -7,7 +7,8 @@
 //
 //   Staff (session cookie, or Authorization: Bearer <one of SUBMIT_TOKENS>)
 //     POST /api/login {email, password}   POST /api/logout   GET /api/me   POST /api/me/password {current, next}
-//     POST /api/password-help {email}   "Forgot your password?" (shows on the Team page)
+//     POST /api/password-help {email}   "Forgot your password?": emails a link (or, without email, shows on the Team page)
+//     POST /api/password-reset {token, next}   the page that link opens
 //     GET  /api/catalog               campaigns and variants on the desktop
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
@@ -51,7 +52,7 @@ import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putSti
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
-  callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetRequests, sameString, sessionUser, updateUser, type Caller,
+  callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
 } from "./auth";
 
 type Status = "queued" | "claimed" | "rendering" | "uploading" | "done" | "failed" | "cancelled";
@@ -404,6 +405,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/login" && m === "POST") return login(req, env);
   if (p === "/api/logout" && m === "POST") return logout(req, env);
   if (p === "/api/password-help" && m === "POST") return requestPasswordHelp(req, env);
+  if (p === "/api/password-reset" && m === "POST") return resetWithLink(req, env);
   if (p === "/api/me" || p === "/api/me/password") {
     const u = await sessionUser(req, env);
     if (!u) throw new HttpError(401, "Please sign in");
