@@ -21,7 +21,8 @@
 //     GET  /api/drafts?brand=         saved New video drafts     POST /api/drafts?brand= {title, data} -> draft
 //     GET/PUT/DELETE /api/drafts/:id  one draft, with its form data (PUT {title, data})
 //     GET/PUT /api/jobs/:id/post      approve and post: the page copy and captions for a finished video (posts.ts)
-//     POST /api/jobs/:id/post/draft   Claude writes them    POST .../preview  desktop builds a preview link
+//     POST /api/jobs/:id/post/draft   Claude writes them    POST .../preview  desktop makes the images and a preview link
+//     GET  /api/jobs/:id/stills/:name one of the social images the last preview made (carousel-1, teaser-1-feed...)
 //     POST /api/jobs/:id/post/approve {start?}  admins: the desktop puts the page live and schedules the posts
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
@@ -36,6 +37,7 @@
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
 //     POST /api/desktop/jobs/:id/finish           {message, result} -> a page or publish job is done (no video)
+//     PUT  /api/desktop/jobs/:id/stills/:name     raw PNG: a social image from a page or publish job
 //     POST /api/desktop/jobs/:id/upload/start     -> starts an R2 multipart upload
 //     PUT  /api/desktop/jobs/:id/upload/part?n=1  raw bytes of one part (5 MB minimum except the last)
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
@@ -44,7 +46,7 @@ import { BRANDS, HttpError, body, json, now, type Env } from "./common";
 import { campaignId, draftScript, validateSpec } from "./build";
 import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
-import { approvePost, draftPost, getPost, previewPost, putPost, taskFinished } from "./posts";
+import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
@@ -382,6 +384,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
     const dl = p.match(/^\/api\/desktop\/uploads\/([0-9a-f-]{36})$/);
     if (m === "GET" && dl) return desktopDownload(env, dl[1]);
+    const st = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
+    if (m === "PUT" && st) return putStill(req, env, await activeJob(env, st[1]), st[2]);
     const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|finish|upload\/start|upload\/part|upload\/complete)$/);
     if (d) {
       const [, id, action] = d;
@@ -441,6 +445,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (pm && pm[2] === "draft" && m === "POST") return draftPost(env, c, pm[1]);
   if (pm && pm[2] === "preview" && m === "POST") return previewPost(env, c, pm[1]);
   if (pm && pm[2] === "approve" && m === "POST") return approvePost(req, env, c, pm[1]);
+  const sm = p.match(/^\/api\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
+  if (sm && m === "GET") return getStill(env, c, sm[1], sm[2]);
   const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video))?$/);
   if (s) {
     const [, id, action] = s;

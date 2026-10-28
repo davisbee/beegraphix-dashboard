@@ -254,8 +254,28 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.equal(pj.kind, "page");
   assert.equal(pj.payload.slug, slug);
   assert.equal(pj.payload.copy.page.headline, "The hoodie your crew wears");
-  await call("POST", `/api/desktop/jobs/${pj.id}/finish`, T.worker, { message: "Preview ready", result: { previewUrl: `https://preview.beegraphix-blog.pages.dev/${slug}/` } });
-  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.previewUrl, `https://preview.beegraphix-blog.pages.dev/${slug}/`);
+  // the images: the desktop sends PNGs, the dashboard shows them on the video's page
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("fake image")]);
+  assert.equal((await call("PUT", `/api/desktop/jobs/${pj.id}/stills/carousel-1`, T.worker, null, png)).status, 200);
+  assert.equal((await call("PUT", `/api/desktop/jobs/${pj.id}/stills/teaser-1-feed`, T.worker, null, png)).status, 200);
+  assert.equal((await call("PUT", `/api/desktop/jobs/${pj.id}/stills/evil`, T.worker, null, png)).status, 400, "unknown name");
+  assert.equal((await call("PUT", `/api/desktop/jobs/${pj.id}/stills/carousel-2`, T.worker, null, Buffer.from("not a png"))).status, 400, "PNG only");
+  assert.equal((await call("PUT", `/api/desktop/jobs/${id}/stills/carousel-1`, T.worker, null, png)).status, 409, "only page and publish jobs");
+  await call("POST", `/api/desktop/jobs/${pj.id}/finish`, T.worker, { message: "Preview ready", result: { previewUrl: `https://preview.beegraphix-blog.pages.dev/${slug}/`, stills: ["carousel-1", "teaser-1-feed", "../x"] } });
+  const ready = (await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post;
+  assert.equal(ready.previewUrl, `https://preview.beegraphix-blog.pages.dev/${slug}/`);
+  assert.deepEqual(ready.stills, ["carousel-1", "teaser-1-feed"]);
+  const img = await fetch(`${BASE}/api/jobs/${id}/stills/carousel-1`, { headers: { authorization: `Bearer ${T.bgx}` } });
+  assert.equal(img.status, 200);
+  assert.equal(img.headers.get("content-type"), "image/png");
+  assert.ok(Buffer.from(await img.arrayBuffer()).equals(png));
+  assert.equal((await fetch(`${BASE}/api/jobs/${id}/stills/carousel-1`, { headers: { authorization: `Bearer ${T.rugbee}` } })).status, 404, "other brand");
+  // new words on the images mean the images are out of date; caption edits don't
+  await call("PUT", `/api/jobs/${id}/post`, T.bgx, { copy: { ...copy, captions: { ...copy.captions, teaser1: "Day one {url}" } } });
+  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.stills.length, 2);
+  const words = await call("PUT", `/api/jobs/${id}/post`, T.bgx, { copy: { ...copy, images: { teaser1: " Stop \n buying \n the \n wrong " } } });
+  assert.equal(words.data.post.copy.images.teaser1, "Stop\nbuying\nthe", "3 lines at most");
+  assert.deepEqual(words.data.post.stills, []);
 
   assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.bgx, {})).status, 403, "staff can't approve");
   const ap = await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06" });
