@@ -5,7 +5,7 @@ It runs on Cloudflare. The video building itself stays on AI-DESKTOP, in the
 [Content Factory](https://github.com/davisbee/beegraphix-content-factory).
 
 ```text
- staff browser ──> Cloudflare Worker (this repo) ──> D1 job queue + R2 video storage
+ staff browser ──> Cloudflare Worker (this repo) ──> D1 (people, sessions, jobs) + R2 video storage
                                    ^
                                    │ AI-DESKTOP calls out for work (npm run worker), renders with the
                                    │ job's brand kit, uploads the MP4. Nothing on the office network is opened.
@@ -14,11 +14,32 @@ It runs on Cloudflare. The video building itself stays on AI-DESKTOP, in the
 ## Build stages
 
 1. **Brand kits.** Done in the Content Factory (`brands/beegraphix`, `brands/rugbee`).
-2. **Job queue and desktop worker.** This repo is at this stage. It's an API only: jobs are submitted
-   by hand with `npm run job` in the Content Factory.
-3. The dashboard screens: login, goal, presenter, template, script box, uploads, status, approve and post.
+2. **Job queue and desktop worker.** Done. Jobs can also be submitted by hand with `npm run job` in the
+   Content Factory.
+3. **The dashboard screens.** Part 1 is in: sign in, the Team page, the Videos list and video page, and
+   rendering any campaign that's on the desktop. Still to come: the New video screen (goal, presenter,
+   template, script box with "Draft it for me", uploads) and approve and post.
 4. HeyGen avatars.
 5. Rugbee goes live.
+
+## Signing in
+
+Each person has an email and password and belongs to one brand (`beegraphix`, `rugbee`, or `*` for
+every brand). Admins add people on the **Team** page; a new person gets a temporary password and picks
+their own the first time they sign in. Five wrong passwords lock a login for 15 minutes; an admin's
+password reset clears it.
+
+The very first admin is added with the `*` token from `SUBMIT_TOKENS`:
+
+```sh
+DASHBOARD_URL=https://content-factory-dashboard.<account>.workers.dev DASHBOARD_ADMIN_TOKEN=<the * token> \
+  npm run add-user -- --email you@example.com --name "Your Name" --brand "*" --admin
+```
+
+How it's kept safe: passwords are PBKDF2-SHA256 with a salt per person; the browser only holds a random
+session cookie (HttpOnly, Secure, SameSite=Lax) and D1 stores its SHA-256; every change request must
+come from the dashboard itself (custom header and Origin check); the pages send a strict
+Content-Security-Policy (`public/_headers`).
 
 ## The job queue API
 
@@ -27,11 +48,15 @@ whose campaign is painted with a different brand kit.
 
 | Who | Call | What it does |
 |---|---|---|
-| staff (`SUBMIT_TOKENS`) | `POST /api/jobs` `{campaign, variant, draft?, brand?}` | queue a render |
+| anyone | `POST /api/login`, `POST /api/logout`, `GET /api/me`, `POST /api/me/password` | signing in |
+| staff (signed in, or `SUBMIT_TOKENS`) | `POST /api/jobs` `{campaign, variant, draft?, brand?}` | queue a render |
 | | `GET /api/jobs`, `GET /api/jobs/:id` | status |
 | | `POST /api/jobs/:id/cancel` | cancel while still queued |
-| | `GET /api/jobs/:id/video` | the finished MP4 |
+| | `GET /api/jobs/:id/video` | the finished MP4 (seekable; `?download` saves it) |
+| | `GET /api/catalog` | campaigns and versions on the desktop |
+| admins | `GET/POST /api/users`, `POST /api/users/:id`, `POST /api/users/:id/reset` | Team page |
 | desktop (`WORKER_TOKEN`) | `POST /api/desktop/claim` | take the oldest queued job (204 when none) |
+| | `PUT /api/desktop/catalog` | the campaigns on the PC (sent at start and every 10 minutes) |
 | | `POST /api/desktop/jobs/:id/heartbeat` | rendering/uploading progress |
 | | `POST /api/desktop/jobs/:id/fail` | report an error |
 | | `POST …/upload/start`, `PUT …/upload/part?n=`, `POST …/upload/complete` | send the video to R2 in parts |
@@ -50,8 +75,8 @@ and Secrets), never in git:
 
 ## Cloudflare resources
 
-- Worker `content-factory-dashboard`
-- D1 database `content-factory` (jobs table, `migrations/`)
+- Worker `content-factory-dashboard` (the screens are the static files in `public/`)
+- D1 database `content-factory` (people, sessions, jobs and the campaign list; `migrations/`)
 - R2 bucket `content-factory-media` (finished videos under `outputs/<brand>/<job>.mp4`)
 
 `npm run deploy` applies new database migrations, then deploys the Worker.
@@ -63,6 +88,9 @@ npm install
 cp .dev.vars.example .dev.vars
 npm run db:migrate:local
 npm run dev          # http://localhost:8787, with a local database and bucket
+# a local admin to sign in with:
+DASHBOARD_URL=http://localhost:8787 DASHBOARD_ADMIN_TOKEN=local-admin-token-0123456789abcdef \
+  npm run add-user -- --email me@example.com --name Me --brand "*" --admin
 npm test             # in a second terminal: end-to-end tests against the dev server
 npm run typecheck
 ```

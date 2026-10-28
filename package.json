@@ -2,14 +2,15 @@
   "name": "beegraphix-dashboard",
   "private": true,
   "type": "module",
-  "description": "Content Factory Dashboard: job queue and (later) web app on Cloudflare. Rendering runs on AI-DESKTOP.",
+  "description": "Content Factory Dashboard: the staff web app and job queue on Cloudflare. Rendering runs on AI-DESKTOP.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler d1 migrations apply content-factory --remote && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply content-factory --local",
     "typecheck": "wrangler types && tsc --noEmit",
-    "test": "node --test test/*.test.mjs",
-    "types": "wrangler types"
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "types": "wrangler types",
+    "add-user": "node scripts/add-user.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

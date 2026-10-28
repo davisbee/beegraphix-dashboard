@@ -1,10 +1,12 @@
 {
-  // Content Factory Dashboard on Cloudflare. Stage 2: the job queue AI-DESKTOP pulls render jobs from.
+  // Content Factory Dashboard on Cloudflare: the staff web app (public/) and the job queue AI-DESKTOP pulls from.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "content-factory-dashboard",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },
+  // The screens are static files; every /api/ request goes to the Worker first.
+  "assets": { "directory": "public", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
   "d1_databases": [
     {
       "binding": "DB",
