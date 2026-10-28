@@ -16,6 +16,8 @@ export interface Env {
   RESEND_API_KEY?: string; // Resend, for "Forgot your password?" emails. Without it the request goes to the Team page.
   EMAIL_FROM?: string; // sender for those emails; default "Content Factory <noreply@shopbgx.com>"
   RESEND_BASE_URL?: string; // tests only: a stand-in for Resend
+  HEYGEN_API_KEY?: string; // HeyGen, for the AI avatar (heygen.ts)
+  HEYGEN_BASE_URL?: string; // tests only: a stand-in for HeyGen
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

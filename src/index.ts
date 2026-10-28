@@ -30,6 +30,7 @@
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
 //     GET  /api/jobs/:id/video        the finished MP4 (Range requests; ?download for a file)
+//     GET/PUT/POST /api/heygen/...   AI avatar setup, admins only (heygen.ts)
 //     GET/POST /api/users, POST /api/users/:id, POST /api/users/:id/reset   Team page (admins)
 //
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
@@ -50,6 +51,7 @@ import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
+import { heygenRoute } from "./heygen";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
@@ -415,6 +417,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   }
 
   const c = await caller(req, env);
+  const hg = await heygenRoute(req, url, env, c, p);
+  if (hg) return hg;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
 
