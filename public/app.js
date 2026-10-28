@@ -200,6 +200,26 @@ const PAGE_BOXES = [
 const CAPTION_BOXES = [
   ["instagram", "Instagram"], ["facebook", "Facebook"], ["linkedin", "LinkedIn"], ["tiktok", "TikTok"], ["youtubeTitle", "YouTube title"], ["youtube", "YouTube description"],
 ];
+const WEEK_BOXES = [["teaser1", "Day 1: first teaser"], ["carousel", "Day 2: carousel"], ["teaser2", "Day 4: second teaser"]];
+const IMAGE_BOXES = [
+  ["teaser1", "First teaser", "textarea", "2 or 3 short lines, one per row. The last line gets the gold box."],
+  ["teaser2", "Second teaser", "textarea", "2 or 3 short lines, one per row."],
+  ["closeHeadline", "Last carousel slide", "input", "A few words above the quote button."],
+  ["closeSubline", "Under it", "input", ""],
+];
+// The week of posts, the same as postPlan() in the Content Factory's scripts/lib/publish.mjs. A step without its
+// caption is skipped; on Instagram {url} reads "Link in bio." because Instagram doesn't link captions.
+const WEEK = [
+  { day: 0, name: "Instagram reel", cap: "instagram", video: true },
+  { day: 0, name: "Facebook reel", cap: "facebook", video: true },
+  { day: 0, name: "TikTok", cap: "tiktok", video: true },
+  { day: 0, name: "YouTube Short", cap: "youtube", video: true, title: true },
+  { day: 0, name: "LinkedIn", cap: "linkedin", images: ["ad-linkedin"] },
+  { day: 1, name: "Instagram and Facebook", cap: "teaser1", images: ["teaser-1-feed"] },
+  { day: 2, name: "Instagram, Facebook and LinkedIn", cap: "carousel", images: "carousel" },
+  { day: 4, name: "Instagram and Facebook", cap: "teaser2", images: ["teaser-2-feed"] },
+  { day: 5, name: "Instagram and Facebook story", cap: null, images: ["ad-story"], story: true },
+];
 
 async function showPosting(j) {
   const box = $("#posting");
@@ -208,17 +228,17 @@ async function showPosting(j) {
   if (!$("#posting")) return;
   if (!d.supported) { box.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="muted small" style="margin:0">${esc(d.why)} For now, download the video.</p></div>`; return; }
   const p = d.post;
-  const copy = p?.copy ?? { page: {}, captions: {} };
+  const copy = { page: {}, captions: {}, images: {}, ...p?.copy };
   const task = p?.task;
   const busy = !!task?.busy;
   const live = !!(p?.liveUrl || p?.posted);
   const locked = busy || live;
   const link = d.link;
   const field = (key, label, kind, val, hint = "") => `<div class="field"><label for="pf-${key.replace(".", "-")}">${esc(label)}</label>${kind === "textarea"
-    ? `<textarea id="pf-${key.replace(".", "-")}" rows="${key.startsWith("captions.") && !key.endsWith("Title") ? 5 : 2}" data-pk="${key}" ${locked ? "disabled" : ""}>${esc(val ?? "")}</textarea>`
+    ? `<textarea id="pf-${key.replace(".", "-")}" rows="${key.startsWith("captions.") && !key.endsWith("Title") ? 5 : key.startsWith("images.") ? 3 : 2}" data-pk="${key}" ${locked ? "disabled" : ""}>${esc(val ?? "")}</textarea>`
     : `<input type="text" id="pf-${key.replace(".", "-")}" data-pk="${key}" value="${esc(val ?? "")}" ${locked ? "disabled" : ""}>`}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
   const taskLine = !task ? "" : task.busy
-    ? `<div class="notice">${task.kind === "page" ? "The desktop is building the preview" : "The desktop is posting"}… <span class="muted small">${esc(task.message ?? "")}</span></div>`
+    ? `<div class="notice">${task.kind === "page" ? "The desktop is making the images and the preview (2 or 3 minutes)" : "The desktop is posting"}… <span class="muted small">${esc(task.message ?? "")}</span></div>`
     : task.status === "failed" ? `<div class="error">${task.kind === "page" ? "The preview didn't build" : "Posting didn't finish"}: ${esc((task.message ?? "").split("\n")[0])}</div>` : "";
   const posted = (p?.posted ?? []).map((x) => `<li>${esc(x.platform ?? x.key)}${x.scheduleDate ? `: ${esc(when(x.scheduleDate))}` : ""}${x.status ? ` <span class="muted small">(${esc(x.status)})</span>` : ""}</li>`).join("");
   box.innerHTML = `<div class="card" id="postCard"><h2>Page and posts</h2>
@@ -233,42 +253,64 @@ async function showPosting(j) {
       ${d.program ? "" : `<h3 class="sub">The page</h3>
         <div class="field"><label for="pf-slug">Page address</label><div class="slugrow"><span class="muted">blog.beegraphix.com/</span><input type="text" id="pf-slug" data-pk="slug" value="${esc(p?.slug ?? d.suggestedSlug ?? "")}" ${locked ? "disabled" : ""}></div></div>
         ${PAGE_BOXES.map(([k, l, kind]) => field(`page.${k}`, l, kind, copy.page[k])).join("")}`}
-      <h3 class="sub">Captions</h3><p class="muted small" style="margin:0 0 10px">Leave one empty to skip that site. <b>{url}</b> becomes the link to ${d.program ? "the program page" : "the page"}, tagged so you can see which post a quote came from.</p>
+      <h3 class="sub">Captions</h3><p class="muted small" style="margin:0 0 10px">Leave one empty to skip that post. <b>{url}</b> becomes the link to ${d.program ? "the program page" : "the page"}, tagged so you can see which post a quote came from.</p>
+      <p class="small" style="margin:0 0 8px"><b>Day 0, with the video</b></p>
       ${CAPTION_BOXES.map(([k, l]) => field(`captions.${k}`, l, k === "youtubeTitle" ? "input" : "textarea", copy.captions[k])).join("")}
+      <p class="small" style="margin:6px 0 8px"><b>Later in the week, with the images</b> <span class="muted">These go to Instagram and Facebook (the carousel to LinkedIn too). The day 5 story has no caption.</span></p>
+      ${WEEK_BOXES.map(([k, l]) => field(`captions.${k}`, l, "textarea", copy.captions[k])).join("")}
+      <h3 class="sub">Words on the images</h3>
+      ${IMAGE_BOXES.map(([k, l, kind, hint]) => field(`images.${k}`, l, kind, copy.images[k], hint)).join("")}
       <div class="field" style="max-width:240px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
-      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Each post as it'll go to HighLevel, with the finished video. This updates as you type.</p>
-      <div class="feed" id="feed"></div>
+      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Every post for the week as it'll go to HighLevel, at 11:30 each day. The words update as you type; ${p?.stills?.length ? "press <b>Build Preview</b> again after changing the words on the images." : "press <b>Build Preview</b> to make the images."}</p>
+      <div id="feed"></div>
       ${d.program ? "" : p?.previewUrl ? `<h3 class="sub">The page</h3><p class="muted small" style="margin:0 0 10px">The preview as a phone sees it. <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">Open it full size</a>.${live ? "" : " Press Build Preview again after changing the page wording."}</p>
         <div class="phone"><iframe src="${esc(p.previewUrl)}" title="Page preview" loading="lazy"></iframe></div>`
         : `<p class="muted small">Press <b>Build Preview</b> to see the page here too.</p>`}
-      ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button>${d.program ? "" : `<button class="btn outline" type="button" id="postPreview">Build Preview</button>`}${d.canApprove
+      ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button><button class="btn outline" type="button" id="postPreview">${d.program ? "Make the Images" : "Build Preview"}</button>${d.canApprove
         ? `<button class="btn" type="button" id="postApprove">Approve and Post</button>` : `<span class="small muted">An admin approves and posts.</span>`}</div>
         <p class="small muted" id="postState" style="margin:10px 0 0"></p>`}`}
   </div>`;
 
   const err = (e) => { const el = $("#postErr"); if (el) el.innerHTML = `<div class="error">${esc(e.message)}</div>`; };
   const values = () => {
-    const out = { copy: { page: { ...copy.page }, captions: { ...copy.captions } } };
+    const out = { copy: { page: { ...copy.page }, captions: { ...copy.captions }, images: { ...copy.images } } };
     box.querySelectorAll("[data-pk]").forEach((el) => {
       const [a, b] = el.dataset.pk.split(".");
       if (b) out.copy[a][b] = el.value; else out[a] = el.value;
     });
     return out;
   };
-  // The posts as ghl-social.mjs sends them: one per site with a caption, all on the start day at 11:30.
+  // The week as the desktop schedules it (WEEK above), with the video and the images the last preview made.
   const feed = () => {
     const el = $("#feed");
     if (!el) return;
     const v = values(), c = v.copy.captions;
     const url = d.program ? link : `https://blog.beegraphix.com/${v.slug || "…"}`;
-    const day = v.start ? new Date(`${v.start}T11:30:00`).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-    const sites = [["instagram", "Instagram reel"], ["facebook", "Facebook reel"], ["tiktok", "TikTok"], ["youtube", "YouTube Short"], ["linkedin", "LinkedIn"]].filter(([k]) => (c[k] ?? "").trim());
-    el.innerHTML = sites.length ? sites.map(([k, name]) => `<div class="post">
-        <div class="posthead"><b>${name}</b><span class="muted small">${esc(day)}</span></div>
-        <video controls playsinline muted preload="metadata" src="/api/jobs/${j.id}/video#t=0.5"></video>
-        ${k === "youtube" ? `<div class="posttitle">${esc(c.youtubeTitle || jobTitle(j).title)}</div>` : ""}
-        <div class="postcap">${esc(c[k].replaceAll("{url}", url)).replace(/(https:\/\/[^\s<]+)/g, '<span class="link">$1</span>')}</div>
-      </div>`).join("") : `<p class="muted small">No captions yet, so nothing would be posted.</p>`;
+    const has = (k) => !!(c[k] ?? "").trim();
+    const made = new Set(p?.stills ?? []);
+    const carousel = (p?.stills ?? []).filter((n) => n.startsWith("carousel-"));
+    const img = (n, cls = "") => made.has(n)
+      ? `<img class="${cls}" src="/api/jobs/${j.id}/stills/${n}?v=${encodeURIComponent(p.stillsAt ?? "")}" alt="">`
+      : `<div class="noimg ${cls}">Press Build Preview to make this image</div>`;
+    const dayOf = (n) => { if (!v.start) return ""; const t = new Date(`${v.start}T11:30:00`); t.setDate(t.getDate() + n); return t.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+    const anyFeed = has("instagram") || has("facebook");
+    const steps = WEEK.filter((w) => (w.story ? anyFeed : has(w.cap)));
+    if (!steps.length) { el.innerHTML = `<p class="muted small">No captions yet, so nothing would be posted.</p>`; return; }
+    const days = [...new Set(steps.map((w) => w.day))];
+    el.innerHTML = days.map((n) => `<div class="day"><div class="dayhead"><b>Day ${n}</b> <span class="muted small">${esc(dayOf(n))}</span></div><div class="feed">${steps.filter((w) => w.day === n).map((w) => {
+      const media = w.video ? `<video controls playsinline muted preload="metadata" src="/api/jobs/${j.id}/video#t=0.5"></video>`
+        : w.images === "carousel" ? `<div class="strip">${(carousel.length ? carousel : ["carousel-1"]).map((x) => img(x)).join("")}</div>`
+        : w.images.map((x) => img(x, x === "ad-linkedin" ? "wide" : x === "ad-story" ? "tall" : "")).join("");
+      const text = w.cap ? c[w.cap] : "";
+      const ig = w.cap && !w.video && w.cap !== "linkedin" && text.includes("{url}");
+      return `<div class="post">
+        <div class="posthead"><b>${esc(w.name)}</b>${w.images === "carousel" && carousel.length ? `<span class="muted small">${carousel.length} slides, swipe</span>` : ""}</div>
+        ${media}
+        ${w.title ? `<div class="posttitle">${esc(c.youtubeTitle || jobTitle(j).title)}</div>` : ""}
+        ${w.story ? `<div class="postcap muted">Stories go out without a caption.</div>` : `<div class="postcap">${esc(text.replaceAll("{url}", url)).replace(/(https:\/\/[^\s<]+)/g, '<span class="link">$1</span>')}</div>`}
+        ${ig ? `<div class="small muted" style="margin-top:6px">On Instagram the link reads "Link in bio."</div>` : ""}
+      </div>`;
+    }).join("")}</div></div>`).join("");
   };
   feed();
   let typing;
@@ -288,7 +330,7 @@ async function showPosting(j) {
   press("postApprove", async () => {
     const v = values();
     const what = d.program ? "The posts get scheduled" : `The page goes live at blog.beegraphix.com/${v.slug} and the posts get scheduled`;
-    if (!confirm(`Approve and post? ${what} in HighLevel for ${v.start}.`)) return false;
+    if (!confirm(`Approve and post? ${what} in HighLevel for the week starting ${v.start}.`)) return false;
     await saveIt();
     await api("POST", `/api/jobs/${j.id}/post/approve`, { start: v.start });
     await again();
