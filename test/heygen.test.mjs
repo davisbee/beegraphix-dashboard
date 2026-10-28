@@ -50,3 +50,32 @@ test("the preview proxy only fetches HeyGen images", async () => {
   assert.equal((await call("GET", `/api/heygen/preview?u=${encodeURIComponent("http://files.heygen.ai/x.jpg")}`, T.admin)).status, 400);
   assert.equal((await call("GET", "/api/heygen/preview?u=nope", T.admin)).status, 400);
 });
+
+const W = "local-worker-token-0123456789abcdef";
+
+test("New video only offers the AI avatar when it's ready, and says why not", async () => {
+  assert.equal((await call("GET", "/api/heygen/available")).status, 401);
+  const a = await call("GET", "/api/heygen/available", T.bgx);
+  assert.equal(a.status, 200, "any signed-in person can ask");
+  assert.equal(a.data.available, false);
+  assert.match(a.data.reason, /isn't connected/);
+});
+
+test("the desktop reports what it can do along with its catalog", async () => {
+  const before = await call("GET", "/api/catalog", T.admin);
+  const campaigns = (before.data.campaigns ?? []).map((c) => ({ brand: c.brand, campaign: c.campaign, title: c.title, variants: c.variants }));
+  const r = await call("PUT", "/api/desktop/catalog", W, { campaigns, features: ["heygen", "BAD feature!"] });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal((await call("PUT", "/api/desktop/catalog", W, { campaigns })).status, 200, "older desktops send no features");
+  assert.equal((await call("GET", "/api/desktop/heygen/abc123xyz", T.admin)).status, 401, "clip status is for the desktop only");
+  assert.equal((await call("GET", "/api/desktop/heygen/bad%20id", W)).status, 400);
+});
+
+test("a build with the AI avatar is refused while it isn't available", async () => {
+  const { formats } = (await call("GET", "/api/formats", T.bgx)).data;
+  const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { template: formats[0].id, title: "Avatar test", goal: "reach", look: "creator", presenter: { mode: "heygen", name: "Davis" } } });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /AI avatar isn't available/);
+  const bad = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: { template: formats[0].id, title: "Avatar test", goal: "reach", look: "creator", presenter: { mode: "robot", name: "Davis" } } });
+  assert.match(bad.data.error, /Pick who's on camera/);
+});

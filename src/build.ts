@@ -12,6 +12,7 @@ import type { Caller } from "./auth";
 import { readyUploads } from "./uploads";
 import { formatOf, type BeatKind, type FormatDef } from "./formats";
 import { pageText } from "./lookup";
+import { avatarAvailability } from "./heygen";
 
 export const GOALS = ["reach", "target", "sell"] as const;
 export const LOOKS = ["creator", "full"] as const; // variant ids the desktop renders
@@ -43,7 +44,8 @@ export interface BuildSpec {
   goal: (typeof GOALS)[number];
   audience: string;
   look: (typeof LOOKS)[number];
-  presenter: { mode: "self"; name: string; title: string };
+  /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts). */
+  presenter: { mode: "self" | "heygen"; name: string; title: string; look?: { id: string; name: string } };
   hook: string;
   hookText: string;
   cta: string;
@@ -55,6 +57,8 @@ export interface BuildSpec {
   ctaEyebrow: string;
   footage: Record<string, string>;
   greenScreen: boolean;
+  /** AI avatar only: HeyGen video id per clip (hook, beat ids, cta), started when the job is submitted. */
+  heygen?: Record<string, string>;
 }
 
 /** Clips the presenter films for a format: the hook, one per beat, the payoff. */
@@ -79,8 +83,15 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   if (title.length < 4) throw new HttpError(400, "Give the video a title");
   if (!GOALS.includes(r.goal)) throw new HttpError(400, "Pick a goal: reach, target or sell");
   if (!LOOKS.includes(r.look)) throw new HttpError(400, "Pick a look");
-  if (r.presenter?.mode !== "self") throw new HttpError(400, "Recording yourself is the only presenter option so far");
-  const presenter = { mode: "self" as const, name: str(r.presenter?.name, 80), title: str(r.presenter?.title, 80) };
+  const mode = r.presenter?.mode;
+  if (mode !== "self" && mode !== "heygen") throw new HttpError(400, "Pick who's on camera: record yourself or the AI avatar");
+  let look: { id: string; name: string } | undefined;
+  if (mode === "heygen") {
+    const a = await avatarAvailability(env);
+    if (!a.available) throw new HttpError(400, `The AI avatar isn't available: ${a.reason}`);
+    look = { id: a.look.id, name: a.look.name };
+  }
+  const presenter = { mode, name: str(r.presenter?.name, 80), title: str(r.presenter?.title, 80), ...(look ? { look } : {}) };
   if (!presenter.name) throw new HttpError(400, "Who's on camera? Add the presenter's name");
   const hook = str(r.hook, 400);
   const cta = str(r.cta, 600);
@@ -124,7 +135,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   }
 
   const footage: Record<string, string> = {};
-  for (const clip of clipsOf(f)) {
+  for (const clip of mode === "heygen" ? [] : clipsOf(f)) {
     const id = r.footage?.[clip];
     if (!id) continue;
     if (!UUID.test(String(id))) throw new HttpError(400, `Bad footage for ${clip}`);
@@ -138,9 +149,16 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   return {
     template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look: r.look, presenter,
     hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
-    ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: !!r.greenScreen,
+    ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: mode === "self" && !!r.greenScreen,
   };
 }
+
+/** What the AI avatar says, one HeyGen clip each: the hook, every beat, the payoff. */
+export const avatarLines = (spec: BuildSpec) => [
+  { clip: "hook", script: spec.hook },
+  ...spec.beats.map((b) => ({ clip: b.id, script: b.script })),
+  { clip: "cta", script: spec.cta },
+];
 
 /** A campaign folder name for the desktop: readable, and unique to this job. */
 export function campaignId(title: string, jobId: string) {

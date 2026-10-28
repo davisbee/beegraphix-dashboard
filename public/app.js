@@ -627,6 +627,9 @@ async function pageNew(params = new URLSearchParams()) {
   const clipLabel = (c) => (c === "hook" ? "Hook" : c === "cta" ? "Payoff" : f.beats.find((b) => b.id === c).label);
   const save = () => { v.dirty = true; store(key, JSON.stringify(v)); };
   const busy = new Set(); // uploads still going
+  // The AI avatar: on only when HeyGen is connected, an admin picked the look, and the desktop is up to date.
+  const av = await api("GET", "/api/heygen/available").catch(() => ({ available: false, reason: "Couldn't check" }));
+  if (v.presenter.mode === "heygen" && !av.available) v.presenter.mode = "self";
 
   const choice = (name, value, title, sub, disabled) =>
     `<label class="choice${disabled ? " off" : ""}"><input type="radio" name="${name}" value="${value}" ${disabled ? "disabled" : ""}><span><b>${esc(title)}</b><span class="small muted">${esc(sub)}</span></span></label>`;
@@ -693,17 +696,22 @@ async function pageNew(params = new URLSearchParams()) {
     <div class="card"><div class="step">5</div><h2>Presenter</h2>
       <div class="choices two" style="margin-top:12px">
         ${choice("presenter", "self", "Record yourself", "Film each line on your phone and upload it below.")}
-        ${choice("presenter", "heygen", "AI avatar (HeyGen)", "Coming soon.", true)}
+        ${choice("presenter", "heygen", "AI avatar (HeyGen)", av.available ? `${av.look.name} says each line. Uses HeyGen credits, and the video is labeled AI.` : `Not available yet: ${av.reason}.`, !av.available)}
       </div>
       <div class="grid2" style="margin-top:18px">
         <div class="field"><label for="prName">Name on screen</label><input type="text" id="prName" data-k="presenter.name"></div>
         <div class="field"><label for="prTitle">Title on screen <span class="muted">(optional)</span></label><input type="text" id="prTitle" data-k="presenter.title" placeholder="e.g. Vice President, BeeGraphix"></div>
       </div>
+      <div id="avatarBox" hidden><h3 class="sub">AI avatar</h3>
+        <p class="muted small" style="margin:0">HeyGen makes one clip per line when you press Build. Nothing to film or upload. The video shows an "AI avatar" label the whole time.</p>
+        <p class="small" id="avatarCost" style="margin:10px 0 0"></p></div>
+      <div id="footageBox">
       <h3 class="sub">Footage</h3>
       <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each part of the middle, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
       <div class="row" style="margin:0 0 14px"><button class="btn outline small" type="button" id="copyScriptNv">Copy Script for Teleprompter</button></div>
       <label class="check" style="margin-bottom:14px"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
       <div class="slots">${clips.map((c) => slot(`clip-${c}`, clipLabel(c), "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
+      </div>
     </div>
 
     <div class="card"><div class="step">6</div><h2>Build it</h2>
@@ -737,8 +745,24 @@ async function pageNew(params = new URLSearchParams()) {
     (form.querySelector(`input[name=look][value="${v.look}"]`) ?? form.querySelector("input[name=look]")).checked = true;
     form.querySelector(`input[name=template][value="${f.id}"]`).checked = true;
     if (f.winner) form.querySelector(`input[name=winner][value="${v.winner === 1 ? 1 : 0}"]`).checked = true;
-    form.querySelector("input[name=presenter][value=self]").checked = true;
+    form.querySelector(`input[name=presenter][value=${v.presenter.mode === "heygen" ? "heygen" : "self"}]`).checked = true;
     names();
+    showPresenter();
+  };
+  // Rough HeyGen cost: about 150 spoken words a minute, at Avatar IV's per-minute price.
+  const avatarEstimate = () => {
+    const lines = [v.hook, ...f.beats.map((b) => (b.kind === "product" ? prods[b.product]?.script : v.beats[b.id]?.script)), v.cta];
+    const words = lines.join(" ").split(/\s+/).filter(Boolean).length;
+    const secs = Math.round((words / 150) * 60 + lines.length * 0.5);
+    return { secs, usd: (secs / 60) * (av.usdPerMinute || 0) };
+  };
+  const showPresenter = () => {
+    const ai = v.presenter.mode === "heygen";
+    $("#avatarBox").hidden = !ai;
+    $("#footageBox").hidden = ai;
+    if (!ai) return;
+    const e = avatarEstimate();
+    $("#avatarCost").innerHTML = e.secs > 3 ? `About <b>${e.secs} seconds</b> of avatar, roughly <b>$${e.usd.toFixed(2)}</b> in HeyGen credits.` : "Write the script to see the HeyGen cost.";
   };
   const names = () => form.querySelectorAll("[data-pname]").forEach((el) => { el.textContent = v.products[el.dataset.pname].name; });
   form.addEventListener("input", (e) => {
@@ -746,6 +770,7 @@ async function pageNew(params = new URLSearchParams()) {
     if (el.dataset.k) set(el.dataset.k, el.type === "checkbox" ? el.checked : el.value);
     else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
     else if (el.name === "winner") v.winner = Number(el.value);
+    else if (el.name === "presenter") { v.presenter.mode = el.value; save(); showPresenter(); return; }
     else if (el.name === "template") {
       // Each format keeps its own products: switching never carries a Top 5 shirt into a Product Spotlight (or a program).
       v.shelf = { ...(v.shelf || {}), [v.template]: v.products };
@@ -765,6 +790,7 @@ async function pageNew(params = new URLSearchParams()) {
       }
     }
     save();
+    if (v.presenter.mode === "heygen" && /script|hook|cta/.test(el.dataset.k ?? "")) showPresenter();
   });
   fill();
 
@@ -980,12 +1006,13 @@ async function pageNew(params = new URLSearchParams()) {
     e.preventDefault();
     const err = $("#err");
     if (busy.size) { err.innerHTML = `<div class="error">Wait for the uploads to finish first.</div>`; return; }
+    if (v.presenter.mode === "heygen" && !confirm(`The AI avatar uses about $${avatarEstimate().usd.toFixed(2)} of HeyGen credits. Build it?`)) return;
     const btn = $("#buildBtn");
     btn.disabled = true;
     try {
       const spec = {
         template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.look, winner: v.winner,
-        presenter: { mode: "self", name: v.presenter.name, title: v.presenter.title },
+        presenter: { mode: v.presenter.mode === "heygen" ? "heygen" : "self", name: v.presenter.name, title: v.presenter.title },
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
         products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
         beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),
@@ -1126,7 +1153,7 @@ async function pageAvatar() {
     if (!t) { out.innerHTML = ""; return; }
     const kind = t.mode === "green" ? "green background" : "clear background";
     if (t.saved) {
-      out.innerHTML = `<p class="small" style="margin:0 0 10px"><b>Done</b> (${kind}). The squares show through anywhere the background is clear.</p>
+      out.innerHTML = `<p class="small" style="margin:0 0 10px"><b>Done</b> (${kind}). The squares show through anywhere the background is clear. Browsers can play this kind of clip out of sync; the finished video is fine.</p>
         <div class="checker"><video controls playsinline src="/api/heygen/test/video?v=${encodeURIComponent(t.saved)}"></video></div>`;
       return;
     }

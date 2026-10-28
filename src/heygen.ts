@@ -1,5 +1,8 @@
-// HeyGen AI avatar, stage 1: admins pick the avatar look and make one test clip.
+// HeyGen AI avatar. Admins pick the avatar look and make a test clip (stage 1); anyone can then choose
+// "AI avatar" on New video (stage 2): submitting starts one HeyGen clip per line, and the desktop waits for
+// them, downloads them and frames them (Content Factory scripts/lib/heygen.mjs).
 //
+//   GET  /api/heygen/available       anyone signed in: {available, reason?, look?}  can New video offer it now
 //   GET  /api/heygen                 {ready, choice, test}  is the key set, which look, the last test clip
 //   GET  /api/heygen/looks           the account's own avatar looks (private), to pick from
 //   PUT  /api/heygen/choice          {id, name, preview?}   the look every AI-avatar video uses
@@ -11,7 +14,10 @@
 // API: https://developers.heygen.com (v3). Videos: POST /v3/videos {type: "avatar", avatar_id: <look id>, script,
 // output_format: "webm"} gives a transparent clip when the look was trained with matting. With no voice_id the
 // look's own voice speaks. HeyGen's links expire, so finished clips are copied into R2 straight away.
-// The choice lives in R2 (settings/heygen.json) so no database migration is needed.
+// The choice lives in R2 (settings/heygen.json) so no database migration is needed. The option only turns on
+// once the desktop says it can handle HeyGen clips (it sends features with its catalog: settings/desktop.json).
+//
+//   Desktop: GET /api/desktop/heygen/:videoId -> {status, url, message}  a fresh download link when it's done
 
 import { HttpError, body, json, now, type Env } from "./common";
 import type { Caller } from "./auth";
@@ -202,8 +208,54 @@ async function preview(url: URL) {
   return new Response(res.body, { headers: { "content-type": type, "cache-control": "private, max-age=3600" } });
 }
 
+// ---------- Stage 2: New video ----------
+
+const DESKTOP = "settings/desktop.json";
+const HEYGEN_ID = /^[A-Za-z0-9_-]{6,80}$/;
+/** Avatar IV digital twin, USD per minute (help.heygen.com, API pricing). For the estimate on New video only. */
+export const USD_PER_MINUTE = 4.83;
+
+/** The desktop sends what it can do along with its catalog (worker.mjs). */
+export async function saveDesktopFeatures(env: Env, features: unknown) {
+  if (!Array.isArray(features)) return;
+  const list = features.filter((f) => typeof f === "string" && /^[a-z0-9-]{1,40}$/.test(f)).slice(0, 20);
+  await env.MEDIA.put(DESKTOP, JSON.stringify({ features: list, at: now() }), { httpMetadata: { contentType: "application/json" } });
+}
+
+async function desktopCan(env: Env, feature: string) {
+  const o = await env.MEDIA.get(DESKTOP);
+  if (!o) return false;
+  try { return ((await o.json<{ features?: string[] }>()).features ?? []).includes(feature); } catch { return false; }
+}
+
+/** Whether New video can offer the AI avatar right now, and why not when it can't. */
+export async function avatarAvailability(env: Env) {
+  if (!env.HEYGEN_API_KEY) return { available: false, reason: "HeyGen isn't connected yet" } as const;
+  const look = await chosenLook(env);
+  if (!look) return { available: false, reason: "An admin needs to pick the avatar on the AI avatar page" } as const;
+  if (!(await desktopCan(env, "heygen"))) return { available: false, reason: "Needs a desktop update" } as const;
+  return { available: true, look } as const;
+}
+
+/** Starts one transparent HeyGen clip per line. Returns {clip: videoId}. */
+export async function startClips(env: Env, look: Look, lines: Array<{ clip: string; script: string }>, title: string) {
+  const out: Record<string, string> = {};
+  for (const { clip, script } of lines) out[clip] = await startVideo(env, look, script, "clear", `${title.slice(0, 80)} (${clip})`);
+  return out;
+}
+
+/** GET /api/desktop/heygen/:videoId: how a clip is doing, with a fresh link once it's finished. */
+export async function desktopClipStatus(env: Env, videoId: string) {
+  if (!HEYGEN_ID.test(videoId)) throw new HttpError(400, "Bad HeyGen video id");
+  return json(await videoStatus(env, videoId));
+}
+
 export async function heygenRoute(req: Request, url: URL, env: Env, c: Caller, p: string): Promise<Response | null> {
   if (!p.startsWith("/api/heygen")) return null;
+  if (p === "/api/heygen/available" && req.method === "GET") {
+    const a = await avatarAvailability(env);
+    return json(a.available ? { available: true, look: { name: a.look.name }, usdPerMinute: USD_PER_MINUTE } : a);
+  }
   admin(c);
   const m = req.method;
   if (p === "/api/heygen" && m === "GET") {
