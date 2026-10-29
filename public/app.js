@@ -730,10 +730,11 @@ async function pageNew(params = new URLSearchParams()) {
         <p class="muted small" style="margin:0">HeyGen makes one clip per line when you press Build. Nothing to film or upload. The video shows an "AI avatar" label the whole time.</p>
         <p class="small" id="avatarCost" style="margin:10px 0 0"></p></div>
       <div id="footageBox">
-      <h3 class="sub">Footage</h3>
-      <p class="muted small" style="margin:0 0 12px">One clip per line: the hook, each part of the middle, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
-      <div class="row" style="margin:0 0 14px"><button class="btn outline small" type="button" id="copyScriptNv">Copy Script for Teleprompter</button></div>
-      <label class="check" style="margin-bottom:14px"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
+      <h3 class="sub" id="footageHead">Footage</h3>
+      <p class="muted small" style="margin:0 0 12px" id="footageSelf">One clip per line: the hook, each part of the middle, and the payoff. Vertical, look at the lens. Skip any you haven't filmed yet and the video shows a placeholder there.</p>
+      <p class="muted small" style="margin:0 0 12px" id="footageShop" hidden>Optional: a shop clip behind any line (the press peel, the needle, boxes going out). It plays muted behind the text. Lines without one use the brand studio. Clips come from the Shop Floor shot list.</p>
+      <div class="row" style="margin:0 0 14px" id="teleRow"><button class="btn outline small" type="button" id="copyScriptNv">Copy Script for Teleprompter</button></div>
+      <label class="check" style="margin-bottom:14px" id="gsCheck"><input type="checkbox" data-k="greenScreen"><span>I filmed on the green screen<br><span class="small muted">The desktop cuts out the background and puts you in the brand studio.</span></span></label>
       <div class="slots">${clips.map((c) => slot(`clip-${c}`, clipLabel(c), "video/mp4,video/quicktime,.mov,.mp4,.m4v", "Not uploaded")).join("")}</div>
       </div>
     </div>
@@ -810,7 +811,13 @@ async function pageNew(params = new URLSearchParams()) {
   const showPresenter = () => {
     const ai = v.presenter.mode === "heygen", none = v.presenter.mode === "none";
     $("#avatarBox").hidden = !ai;
-    $("#footageBox").hidden = ai || none;
+    // Faceless: the same boxes take optional shop footage instead of the presenter's clips.
+    $("#footageBox").hidden = ai || (none && !feats.broll);
+    $("#footageHead").textContent = none ? "Shop footage" : "Footage";
+    $("#footageSelf").hidden = none;
+    $("#footageShop").hidden = !none;
+    $("#teleRow").hidden = none;
+    $("#gsCheck").hidden = none;
     $("#nameBox").hidden = none;
     $("#lookBox").hidden = none;
     $("#lookFaceless").hidden = !none;
@@ -1078,7 +1085,7 @@ async function pageNew(params = new URLSearchParams()) {
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
         products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
         beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),
-        footage: Object.fromEntries(clips.filter((c) => v.footage[c]).map((c) => [c, v.footage[c]])),
+        footage: v.presenter.mode === "heygen" || (v.presenter.mode === "none" && !feats.broll) ? {} : Object.fromEntries(clips.filter((c) => v.footage[c]).map((c) => [c, v.footage[c]])),
       };
       const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, draft: v.draft, spec });
       if (v.draftId) await api("DELETE", `/api/drafts/${v.draftId}`).catch(() => {}); // built, so it's not a draft anymore

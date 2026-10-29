@@ -56,6 +56,8 @@ export interface BuildSpec {
   /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts).
    *  "none": faceless, rendered with the Showcase template (look "showcase"). */
   presenter: { mode: "self" | "heygen" | "none"; name: string; title: string; look?: { id: string; name: string } };
+  /** faceless only: shop footage per clip (footage uploads), played behind that scene */
+  broll?: Record<string, string>;
   /** Logo to Gear: the customer's logo (a photo upload), and where it goes on each garment */
   logo?: string;
   logoSpot?: "left-chest" | "front";
@@ -174,13 +176,15 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
     if (winner !== 0 && winner !== 1) throw new HttpError(400, "Pick the winner: A or B");
   }
 
+  // Footage: the presenter's clips; or, for a faceless video, shop footage played behind each line.
   const footage: Record<string, string> = {};
-  for (const clip of mode === "self" ? clipsOf(f) : []) {
+  for (const clip of mode === "self" || mode === "none" ? clipsOf(f) : []) {
     const id = r.footage?.[clip];
     if (!id) continue;
     if (!UUID.test(String(id))) throw new HttpError(400, `Bad footage for ${clip}`);
     footage[clip] = String(id);
   }
+  if (mode === "none" && Object.keys(footage).length && !(await desktopCan(env, "broll"))) throw new HttpError(400, "Shop footage needs a desktop update first");
   const clipLabel = (clip: string) => (clip === "hook" ? "the hook" : clip === "cta" ? "the payoff" : `"${f.beats.find((b) => b.id === clip)?.label}"`);
   await readyUploads(env, brand, [
     ...Object.entries(footage).map(([clip, id]) => ({ id, kind: "footage" as const, what: `Video for ${clipLabel(clip)}` })),
@@ -193,7 +197,9 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
     ...(voice ? { voice } : {}),
     ...(logo ? { logo, logoSpot: r.logoSpot === "front" ? "front" : "left-chest" } : {}),
     hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
-    ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: mode === "self" && !!r.greenScreen,
+    ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow,
+    footage: mode === "self" ? footage : {}, ...(mode === "none" && Object.keys(footage).length ? { broll: footage } : {}),
+    greenScreen: mode === "self" && !!r.greenScreen,
   };
 }
 
