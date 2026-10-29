@@ -28,6 +28,8 @@ export interface BeatDef {
   badge?: string;
   /** product beats in Guess the Price: count down, then reveal the product's price */
   reveal?: boolean;
+  /** product beats in Logo to Gear: the customer's logo stamps onto the garment */
+  stamp?: boolean;
 }
 
 export interface FormatDef {
@@ -50,6 +52,8 @@ export interface FormatDef {
   beats: BeatDef[];
   /** "Pick the winner" for This vs That */
   winner?: boolean;
+  /** asks for the customer's logo (Logo to Gear) */
+  logo?: boolean;
   /** small gold label on the payoff scene */
   ctaEyebrow: string;
   /** what the whole video is, for Claude */
@@ -159,6 +163,21 @@ export const FORMATS: FormatDef[] = [
     ctaEyebrow: "Get your price",
     brief: 'a "guess the price" game: the hook (dare them to guess), three products where viewers guess before the real decorated price is revealed, then the payoff',
     titleExample: "Guess the Price: Custom Carhartt Beanies",
+  },
+  {
+    id: "mockup",
+    name: "Logo to Gear",
+    blurb: 'Their logo lands on three pieces of gear. The "what would yours look like" video. About 35 seconds.',
+    products: { count: 3, title: "The three pieces", hint: `Garments on a plain background work best: the logo goes on the chest. ${PRODUCT_HINT}`, labels: ["Piece 1", "Piece 2", "Piece 3"], nameLabel: "Product name", linkHint: PRODUCT_LINK, style: true },
+    logo: true,
+    beats: [0, 1, 2].map((i) => ({
+      id: `l${i + 1}`, kind: "product" as const, product: i, label: `Piece ${i + 1}`, eyebrow: "With your logo", badge: "", stamp: true,
+      text: "Why this piece, 3 to 5 words",
+      write: "This piece with their logo on it: who wears it and when. 1 or 2 short sentences, about 6 seconds.",
+    })),
+    ctaEyebrow: "See yours",
+    brief: 'a "logo to gear" video: the hook (picture your logo on real gear), three pieces of apparel each shown with the customer\'s logo, then the payoff (get a free mockup or custom pricing)',
+    titleExample: "Your Logo on Three Pieces Your Crew Will Wear",
   },
   {
     id: "textstory",

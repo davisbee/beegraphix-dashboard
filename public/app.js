@@ -537,7 +537,7 @@ function blankVideo() {
     presenter: { mode: "self", name: state.me.name, title: "" },
     hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false, transition: "", voice: "",
     products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "", price: "" })),
-    footage: {}, footageNames: {},
+    footage: {}, footageNames: {}, logo: null, logoName: "", logoSpot: "left-chest",
   };
 }
 
@@ -668,6 +668,8 @@ async function pageNew(params = new URLSearchParams()) {
     </div>
 
     <div class="card"><div class="step">3</div><h2>${esc(f.products.title)}</h2><p class="muted small" style="margin:0 0 16px">${esc(f.products.hint)}</p>
+      ${f.logo ? `<div style="margin:0 0 18px;max-width:420px"><h3 class="sub" style="margin-top:0">The customer's logo</h3><p class="muted small" style="margin:0 0 10px">A PNG with a transparent background works best. A logo on white works too: the white is cleared away.</p>${slot("logo", "Logo", "image/png,image/jpeg,image/webp", "No logo yet")}
+        <div class="field" style="margin:12px 0 0"><label for="logoSpot">Where the logo goes</label><select id="logoSpot" data-k="logoSpot"><option value="left-chest">Left chest (polos, quarter zips, jackets)</option><option value="front">Full front (tees, hoodies)</option></select></div></div>` : ""}
       ${prods.map((_, i) => `<div class="product${N === 1 ? " solo" : f.products.labels[i].length > 3 ? " flat" : ""}" data-i="${i}">
         ${N === 1 ? "" : `<div class="pnum">${esc(f.products.labels[i])}</div>`}
         <div class="pgrid">
@@ -850,7 +852,9 @@ async function pageNew(params = new URLSearchParams()) {
   fill();
 
   // File slots: product photos and the seven footage clips.
-  const slotInfo = (id) => (id.startsWith("photo")
+  const slotInfo = (id) => (id === "logo"
+    ? { kind: "photo", logo: true, get: () => [v.logo, v.logoName], put: (u, n) => { v.logo = u; v.logoName = n; } }
+    : id.startsWith("photo")
     ? { kind: "photo", get: () => [v.products[+id.slice(5)].photo, v.products[+id.slice(5)].photoName], put: (u, n) => { v.products[+id.slice(5)].photo = u; v.products[+id.slice(5)].photoName = n; } }
     : { kind: "footage", get: () => [v.footage[id.slice(5)], v.footageNames[id.slice(5)]], put: (u, n) => { const c = id.slice(5); if (u) { v.footage[c] = u; v.footageNames[c] = n; } else { delete v.footage[c]; delete v.footageNames[c]; } } });
   const slotUi = {};
@@ -866,7 +870,7 @@ async function pageNew(params = new URLSearchParams()) {
       const clr = $("[data-clear]", stateEl);
       if (clr) clr.onclick = () => {
         info.put(null, "");
-        if (info.kind === "photo") { v.products[+id.slice(5)].color = ""; showColors(+id.slice(5)); } // the color was that photo
+        if (info.kind === "photo" && !info.logo) { v.products[+id.slice(5)].color = ""; showColors(+id.slice(5)); } // the color was that photo
         save(); show();
       };
       if (info.kind === "photo") {
@@ -1070,6 +1074,7 @@ async function pageNew(params = new URLSearchParams()) {
         presenter: { mode: ["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self", name: v.presenter.name, title: v.presenter.title },
         ...(v.transition ? { transition: v.transition } : {}),
         ...(v.presenter.mode === "none" && v.voice ? { voice: v.voice } : {}),
+        ...(f.logo && v.logo ? { logo: v.logo, logoSpot: v.logoSpot || "left-chest" } : {}),
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
         products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
         beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),

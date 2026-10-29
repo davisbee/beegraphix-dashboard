@@ -43,6 +43,8 @@ export interface BuildBeat {
   badge?: string;
   /** Guess the Price: the price this beat reveals */
   price?: string;
+  /** Logo to Gear: the logo stamps onto this beat's product */
+  stamp?: boolean;
 }
 
 export interface BuildSpec {
@@ -54,6 +56,9 @@ export interface BuildSpec {
   /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts).
    *  "none": faceless, rendered with the Showcase template (look "showcase"). */
   presenter: { mode: "self" | "heygen" | "none"; name: string; title: string; look?: { id: string; name: string } };
+  /** Logo to Gear: the customer's logo (a photo upload), and where it goes on each garment */
+  logo?: string;
+  logoSpot?: "left-chest" | "front";
   /** faceless only: an ElevenLabs voice reads every line (voiceover.ts). clips: the lines saved, set on submit. */
   voice?: { id: string; name: string; clips?: string[] };
   /** how scenes cut to each other; omitted = the template's own default */
@@ -95,6 +100,10 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   if (title.length < 4) throw new HttpError(400, "Give the video a title");
   if (!GOALS.includes(r.goal)) throw new HttpError(400, "Pick a goal: reach, target or sell");
   if ((f.id === "price" || f.id === "textstory") && !(await desktopCan(env, "price-story"))) throw new HttpError(400, `${f.name} needs a desktop update first`);
+  if (f.logo && !(await desktopCan(env, "mockup"))) throw new HttpError(400, `${f.name} needs a desktop update first`);
+  const logo = f.logo && r.logo ? String(r.logo) : null;
+  if (f.logo && !logo) throw new HttpError(400, "Upload the customer's logo");
+  if (logo && !UUID.test(logo)) throw new HttpError(400, "Bad logo");
   const mode = r.presenter?.mode;
   if (mode !== "self" && mode !== "heygen" && mode !== "none") throw new HttpError(400, "Pick who's on camera: record yourself, the AI avatar, or no one");
   // Faceless videos always render with the Showcase template; videos with a presenter never do.
@@ -156,6 +165,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
       ...(b.eyebrow ? { eyebrow: b.eyebrow } : {}),
       ...(b.badge !== undefined ? { badge: b.badge } : {}),
       ...(b.reveal && b.product !== undefined && products[b.product].price ? { price: products[b.product].price } : {}),
+      ...(b.stamp ? { stamp: true } : {}),
     };
   });
   let winner: number | undefined;
@@ -175,11 +185,13 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   await readyUploads(env, brand, [
     ...Object.entries(footage).map(([clip, id]) => ({ id, kind: "footage" as const, what: `Video for ${clipLabel(clip)}` })),
     ...products.flatMap((p, i) => (p.photo ? [{ id: p.photo, kind: "photo" as const, what: `Photo for ${f.products.labels[i]}` }] : [])),
+    ...(logo ? [{ id: logo, kind: "photo" as const, what: "The logo" }] : []),
   ]);
   return {
     template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look, presenter,
     ...(r.transition ? { transition: r.transition } : {}),
     ...(voice ? { voice } : {}),
+    ...(logo ? { logo, logoSpot: r.logoSpot === "front" ? "front" : "left-chest" } : {}),
     hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
     ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: mode === "self" && !!r.greenScreen,
   };
