@@ -45,6 +45,33 @@ test("picking a look is saved, and a test clip needs the key", async () => {
   assert.equal((await call("POST", "/api/heygen/test", T.admin, { mode: "clear" })).status, 503);
 });
 
+test("admins choose several avatars for New video, with one default", async () => {
+  assert.equal((await call("POST", "/api/heygen/roster", T.bgx, { id: "look_x1" })).status, 403);
+  assert.equal((await call("POST", "/api/heygen/roster", T.admin, { id: "bad id!" })).status, 400);
+  const d = await call("PUT", "/api/heygen/choice", T.admin, { id: "look_def001", name: "Davis office" });
+  assert.equal(d.status, 200);
+  const a = await call("POST", "/api/heygen/roster", T.admin, { id: "look_two002", name: "Davis shop floor" });
+  assert.equal(a.status, 200, JSON.stringify(a.data));
+  assert.equal(a.data.choice.id, "look_def001", "adding one keeps the default");
+  assert.ok(a.data.looks.some((l) => l.id === "look_two002"));
+  assert.ok(a.data.looks.some((l) => l.id === "look_def001"));
+  const again = await call("POST", "/api/heygen/roster", T.admin, { id: "look_two002", name: "Davis shop floor" });
+  assert.equal(again.data.looks.filter((l) => l.id === "look_two002").length, 1, "no duplicates");
+  const g = await call("GET", "/api/heygen", T.admin);
+  assert.ok(Array.isArray(g.data.looks));
+  // Removing the default moves it to another avatar on offer.
+  const r = await call("DELETE", "/api/heygen/roster/look_def001", T.admin);
+  assert.equal(r.status, 200);
+  assert.ok(!r.data.looks.some((l) => l.id === "look_def001"));
+  assert.notEqual(r.data.choice?.id, "look_def001");
+  assert.equal((await call("DELETE", "/api/heygen/roster/look_two002", T.bgx)).status, 403);
+});
+
+test("anyone signed in can load avatar pictures, still HeyGen only", async () => {
+  assert.equal((await call("GET", `/api/heygen/preview?u=${encodeURIComponent("https://example.com/x.jpg")}`, T.bgx)).status, 400);
+  assert.equal((await call("GET", `/api/heygen/preview?u=${encodeURIComponent("https://example.com/x.jpg")}`)).status, 401);
+});
+
 test("the preview proxy only fetches HeyGen images", async () => {
   assert.equal((await call("GET", `/api/heygen/preview?u=${encodeURIComponent("https://example.com/x.jpg")}`, T.admin)).status, 400);
   assert.equal((await call("GET", `/api/heygen/preview?u=${encodeURIComponent("http://files.heygen.ai/x.jpg")}`, T.admin)).status, 400);

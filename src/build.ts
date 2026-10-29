@@ -12,7 +12,7 @@ import type { Caller } from "./auth";
 import { readyUploads } from "./uploads";
 import { formatOf, type BeatKind, type FormatDef } from "./formats";
 import { pageText } from "./lookup";
-import { avatarAvailability, desktopCan } from "./heygen";
+import { avatarAvailability, desktopCan, lookFor } from "./heygen";
 import { checkVoice } from "./voiceover";
 
 export const GOALS = ["reach", "target", "sell"] as const;
@@ -125,7 +125,10 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   if (mode === "heygen") {
     const a = await avatarAvailability(env);
     if (!a.available) throw new HttpError(400, `The AI avatar isn't available: ${a.reason}`);
-    avatar = { id: a.look.id, name: a.look.name };
+    // Staff pick one of the avatars an admin put on offer; no pick means the default.
+    const picked = await lookFor(env, r.presenter?.lookId);
+    if (!picked) throw new HttpError(400, "That AI avatar isn't on offer anymore. Pick another one.");
+    avatar = { id: picked.id, name: picked.name };
   }
   const presenter = mode === "none"
     ? { mode, name: "", title: "" }
