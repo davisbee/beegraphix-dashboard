@@ -149,7 +149,7 @@ test("each format lays out its own beats, and This vs That needs a winner", asyn
   await drain();
   const f = await call("GET", "/api/formats", T.bgx);
   assert.equal(f.status, 200);
-  assert.deepEqual(f.data.formats.map((x) => x.id), ["top5", "spotlight", "versus", "mistakes", "story", "program", "price", "textstory"]);
+  assert.deepEqual(f.data.formats.map((x) => x.id), ["top5", "spotlight", "versus", "mistakes", "story", "program", "price", "mockup", "textstory"]);
 
   const one = (o = {}) => ({ name: "Thing", style: "", link: "", script: "It fixes that.", shortName: "", tag: "", photo: null, ...o });
   const spotlight = spec({

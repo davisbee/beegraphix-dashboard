@@ -114,3 +114,16 @@ test("Guess the Price needs a price per product and puts it on each reveal beat"
   assert.ok(f.includes("price") && f.includes("textstory"));
   await features(["heygen"]);
 });
+
+test("Logo to Gear needs the desktop and the customer's logo", async () => {
+  const three = [1, 2, 3].map((i) => ({ name: `Piece ${i}`, style: `LG${i}`, link: "", script: `Piece ${i}.`, shortName: "", tag: "", photo: null }));
+  const s = (over) => spec({ template: "mockup", title: "Logo to Gear Test", products: three, beats: {}, ...over });
+  await features(["heygen", "showcase"]);
+  assert.match((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({}) })).data.error, /Logo to Gear needs a desktop update/);
+  await features(["heygen", "showcase", "mockup"]);
+  assert.match((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({}) })).data.error, /Upload the customer's logo/);
+  assert.match((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({ logo: "not-an-id" }) })).data.error, /Bad logo/);
+  const missing = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({ logo: "00000000-0000-0000-0000-000000000000" }) });
+  assert.equal(missing.status, 400, "the logo has to be an upload of this brand's");
+  await features(["heygen"]);
+});
