@@ -535,7 +535,7 @@ function blankVideo() {
   return {
     template: "top5", goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "", beats: {}, winner: 0,
     presenter: { mode: "self", name: state.me.name, title: "" },
-    hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false, transition: "",
+    hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false, transition: "", voice: "",
     products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "" })),
     footage: {}, footageNames: {},
   };
@@ -634,6 +634,7 @@ async function pageNew(params = new URLSearchParams()) {
   const feats = await api("GET", "/api/features").catch(() => ({ showcase: false }));
   if (v.presenter.mode === "none" && !feats.showcase) v.presenter.mode = "self";
   if (!feats.showcase) v.transition = "";
+  if (!feats.voiceover) v.voice = "";
 
   const choice = (name, value, title, sub, disabled) =>
     `<label class="choice${disabled ? " off" : ""}"><input type="radio" name="${name}" value="${value}" ${disabled ? "disabled" : ""}><span><b>${esc(title)}</b><span class="small muted">${esc(sub)}</span></span></label>`;
@@ -713,6 +714,15 @@ async function pageNew(params = new URLSearchParams()) {
         <div class="field"><label for="prName">Name on screen</label><input type="text" id="prName" data-k="presenter.name"></div>
         <div class="field"><label for="prTitle">Title on screen <span class="muted">(optional)</span></label><input type="text" id="prTitle" data-k="presenter.title" placeholder="e.g. Vice President, BeeGraphix"></div>
       </div>
+      <div id="voiceBox" hidden><h3 class="sub">Voice</h3>
+        <p class="muted small" style="margin:0 0 12px">Music only, or an ElevenLabs voice reads the script. Each scene runs as long as its line.</p>
+        <div class="row" style="align-items:flex-end;gap:10px">
+          <div class="field" style="margin:0;min-width:280px"><label for="voicePick">Who reads it</label>
+            <select id="voicePick" data-k="voice" ${feats.voiceover ? "" : "disabled"}><option value="">Music only, no voice</option></select></div>
+          <button class="btn outline small" type="button" id="voicePlay" hidden>Play Sample</button>
+        </div>
+        <p class="small muted" id="voiceNote" style="margin:8px 0 0">${feats.voiceover ? "" : "Voiceovers need a desktop update."}</p>
+        <audio id="voiceAudio" hidden></audio></div>
       <div id="avatarBox" hidden><h3 class="sub">AI avatar</h3>
         <p class="muted small" style="margin:0">HeyGen makes one clip per line when you press Build. Nothing to film or upload. The video shows an "AI avatar" label the whole time.</p>
         <p class="small" id="avatarCost" style="margin:10px 0 0"></p></div>
@@ -767,6 +777,33 @@ async function pageNew(params = new URLSearchParams()) {
     const secs = Math.round((words / 150) * 60 + lines.length * 0.5);
     return { secs, usd: (secs / 60) * (av.usdPerMinute || 0) };
   };
+  // ElevenLabs voices for faceless videos, loaded the first time "No presenter" is picked.
+  let voices = null;
+  const loadVoices = async () => {
+    if (voices || !feats.voiceover) return;
+    voices = [];
+    try {
+      const r = await api("GET", "/api/voices");
+      if (!r.ready) { $("#voiceNote").textContent = "ElevenLabs isn't connected yet. An admin adds ELEVENLABS_API_KEY in Cloudflare."; $("#voicePick").disabled = true; return; }
+      voices = r.voices;
+    } catch (e) { $("#voiceNote").textContent = e.message; return; }
+    const sel = $("#voicePick");
+    sel.insertAdjacentHTML("beforeend", voices.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${[x.gender, x.accent].filter(Boolean).length ? ` (${esc([x.gender, x.accent].filter(Boolean).join(", "))})` : ""}${x.category && x.category !== "premade" ? " · yours" : ""}</option>`).join(""));
+    if (v.voice && !voices.some((x) => x.id === v.voice)) v.voice = "";
+    sel.value = v.voice || "";
+    showVoice();
+  };
+  const showVoice = () => {
+    const x = (voices || []).find((y) => y.id === v.voice);
+    $("#voicePlay").hidden = !x?.preview;
+  };
+  $("#voicePlay").onclick = () => {
+    const x = (voices || []).find((y) => y.id === v.voice);
+    if (!x?.preview) return;
+    const a = $("#voiceAudio");
+    a.src = `/api/voices/preview?u=${encodeURIComponent(x.preview)}`;
+    a.play().catch(() => alert("Couldn't play that sample."));
+  };
   const showPresenter = () => {
     const ai = v.presenter.mode === "heygen", none = v.presenter.mode === "none";
     $("#avatarBox").hidden = !ai;
@@ -774,6 +811,8 @@ async function pageNew(params = new URLSearchParams()) {
     $("#nameBox").hidden = none;
     $("#lookBox").hidden = none;
     $("#lookFaceless").hidden = !none;
+    $("#voiceBox").hidden = !none;
+    if (none) loadVoices();
     if (!ai) return;
     const e = avatarEstimate();
     $("#avatarCost").innerHTML = e.secs > 3 ? `About <b>${e.secs} seconds</b> of avatar, roughly <b>$${e.usd.toFixed(2)}</b> in HeyGen credits.` : "Write the script to see the HeyGen cost.";
@@ -805,6 +844,7 @@ async function pageNew(params = new URLSearchParams()) {
     }
     save();
     if (v.presenter.mode === "heygen" && /script|hook|cta/.test(el.dataset.k ?? "")) showPresenter();
+    if (el.dataset.k === "voice") showVoice();
   });
   fill();
 
@@ -1028,6 +1068,7 @@ async function pageNew(params = new URLSearchParams()) {
         template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.presenter.mode === "none" ? "showcase" : v.look, winner: v.winner,
         presenter: { mode: ["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self", name: v.presenter.name, title: v.presenter.title },
         ...(v.transition ? { transition: v.transition } : {}),
+        ...(v.presenter.mode === "none" && v.voice ? { voice: v.voice } : {}),
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
         products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
         beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),
