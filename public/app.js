@@ -368,12 +368,18 @@ async function showPosting(j) {
       ${WEEK_BOXES.map(([k, l]) => field(`captions.${k}`, l, "textarea", copy.captions[k])).join("")}
       <h3 class="sub">Words on the images</h3>
       ${IMAGE_BOXES.map(([k, l, kind, hint]) => field(`images.${k}`, l, kind, copy.images[k], hint)).join("")}
-      <div class="field" style="max-width:240px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
-      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Every post for the week as it'll go to HighLevel, at 11:30 each day. The words update as you type; ${p?.stills?.length ? "press <b>Build Preview</b> again after changing the words on the images." : "press <b>Build Preview</b> to make the images."}</p>
+      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Every post for the week as it'll go to HighLevel: the video on the day and time you pick below, the rest at 11:30 on later days. The words update as you type; ${p?.stills?.length ? "press <b>Build Preview</b> again after changing the words on the images." : "press <b>Build Preview</b> to make the images."}</p>
       <div id="feed"></div>
       ${d.program ? "" : p?.previewUrl ? `<h3 class="sub">The page</h3><p class="muted small" style="margin:0 0 10px">The preview as a phone sees it. <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">Open it full size</a>.${live ? "" : " Press Build Preview again after changing the page wording."}</p>
         <div class="phone"><iframe src="${esc(p.previewUrl)}" title="Page preview" loading="lazy"></iframe></div>`
         : `<p class="muted small">Press <b>Build Preview</b> to see the page here too.</p>`}
+      <h3 class="sub">When it starts</h3>
+      <p class="muted small" style="margin:0 0 10px">The video posts go out at this day and time (Eastern). Everything after follows a day at a time from there.</p>
+      <div class="row" style="align-items:flex-end;margin-bottom:16px">
+        <div class="field" style="margin:0;max-width:200px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
+        <div class="field" style="margin:0;max-width:160px"><label for="pf-time">At</label><input type="time" id="pf-time" data-pk="startTime" step="300" value="${esc(p?.startTime ?? "11:30")}" ${locked ? "disabled" : ""}></div>
+        ${locked ? "" : `<button class="btn outline small" type="button" id="postSoon">Soon (30 min)</button>`}
+      </div>
       ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button><button class="btn outline" type="button" id="postPreview">${d.program ? "Make the Images" : "Build Preview"}</button>${d.canApprove
         ? `<button class="btn" type="button" id="postApprove">Approve and Post</button>` : `<span class="small muted">An admin approves and posts.</span>`}</div>
         <p class="small muted" id="postState" style="margin:10px 0 0"></p>`}`}
@@ -400,7 +406,7 @@ async function showPosting(j) {
     const img = (n, cls = "") => made.has(n)
       ? `<img class="${cls}" src="/api/jobs/${j.id}/stills/${n}?v=${encodeURIComponent(p.stillsAt ?? "")}" alt="">`
       : `<div class="noimg ${cls}">Press Build Preview to make this image</div>`;
-    const dayOf = (n) => { if (!v.start) return ""; const t = new Date(`${v.start}T11:30:00`); t.setDate(t.getDate() + n); return t.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+    const dayOf = (n) => { if (!v.start) return ""; const t = new Date(`${v.start}T${n === 0 ? v.startTime || "11:30" : "11:30"}:00`); t.setDate(t.getDate() + n); return t.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
     const anyFeed = has("instagram") || has("facebook");
     const steps = WEEK.filter((w) => (w.story ? anyFeed : has(w.cap)));
     if (!steps.length) { el.innerHTML = `<p class="muted small">No captions yet, so nothing would be posted.</p>`; return; }
@@ -434,13 +440,23 @@ async function showPosting(j) {
     await again();
   });
   press("postSave", async () => { await saveIt(); $("#postState").textContent = "Saved."; return false; });
+  // Today, half an hour from now (Eastern), rounded up to the next 5 minutes.
+  const soonBtn = $("#postSoon");
+  if (soonBtn) soonBtn.onclick = () => {
+    const t = new Date(Math.ceil((Date.now() + 30 * 60_000) / 300_000) * 300_000);
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(t).map((x) => [x.type, x.value]));
+    $("#pf-start").value = `${parts.year}-${parts.month}-${parts.day}`;
+    $("#pf-time").value = `${parts.hour}:${parts.minute}`;
+    feed();
+  };
   press("postPreview", async () => { await saveIt(); await api("POST", `/api/jobs/${j.id}/post/preview`); await again(); });
   press("postApprove", async () => {
     const v = values();
     const what = d.program ? "The posts get scheduled" : `The page goes live at blog.beegraphix.com/${v.slug} and the posts get scheduled`;
-    if (!confirm(`Approve and post? ${what} in HighLevel for the week starting ${v.start}.`)) return false;
+    const when = new Date(`${v.start}T${v.startTime || "11:30"}:00`).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    if (!confirm(`Approve and post? ${what} in HighLevel, starting ${when}.`)) return false;
     await saveIt();
-    await api("POST", `/api/jobs/${j.id}/post/approve`, { start: v.start });
+    await api("POST", `/api/jobs/${j.id}/post/approve`, { start: v.start, startTime: v.startTime });
     await again();
   });
   if (busy) { stopTimer(); state.timer = setTimeout(() => { if ($("#postCard")) again(); }, 5000); }

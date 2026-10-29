@@ -278,11 +278,18 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.deepEqual(words.data.post.stills, []);
 
   assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.bgx, {})).status, 403, "staff can't approve");
-  const ap = await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06" });
+  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.startTime, "11:30", "11:30 unless someone picks a time");
+  assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { startTime: "25:00" })).status, 400, "a real time");
+  // a date in the past, or a time today that's already gone, can't be approved
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2020-01-01" })).status, 400);
+  assert.match((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: today, startTime: "00:00" })).data.error, /too soon|passed/);
+  const ap = await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06", startTime: "14:25" });
   assert.equal(ap.status, 202, JSON.stringify(ap.data));
   const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
   assert.equal(pub.kind, "publish");
   assert.equal(pub.payload.start, "2099-01-06");
+  assert.equal(pub.payload.startTime, "14:25");
   assert.equal(pub.payload.link, `blog.beegraphix.com/${slug}`);
   await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { message: "Posted", result: { liveUrl: `https://blog.beegraphix.com/${slug}/`, posted: [{ platform: "facebook", status: "scheduled" }] } });
   const after = (await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post;
