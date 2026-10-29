@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/new, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/new, #/store, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -91,26 +91,57 @@ function statusPill(j) {
 // ---------- shell ----------
 
 function shell(page, inner) {
-  const nav = [
-    ["videos", "Videos"],
-    ["new", "New video"],
-    ["render", "Render again"],
-    ...(state.me.role === "admin" ? [["team", "Team"], ["avatar", "AI avatar"]] : []),
-    ["account", "Account"],
+  // One row: logo, the pages people browse, then the Create menu (every way to make a video) and a menu for
+  // the signed-in person. Creating lives in one place so New video, Store ad and Render again aren't
+  // repeated in the nav and again on the Videos page.
+  const admin = state.me.role === "admin";
+  const nav = [["videos", "Videos"], ...(admin ? [["team", "Team"], ["avatar", "AI Avatar"]] : [])];
+  const create = [
+    ["new", "New video", "Pick a goal and a format, write the script", "?fresh"],
+    ["store", "Store ad", "Paste an InkSoft store link, get a video for the owner", ""],
+    ["render", "Render again", "A campaign that's already on the desktop", ""],
   ];
+  const creating = create.some(([id]) => id === page);
+  const initials = String(state.me.name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
   const brandPick = state.brands.length > 1
-    ? `<select id="brandPick" aria-label="Brand">${state.brands.map((b) => `<option value="${b}" ${b === state.brand ? "selected" : ""}>${esc(brandName(b))}</option>`).join("")}</select>`
+    ? `<label class="brandpick"><span class="sr">Brand</span><select id="brandPick">${state.brands.map((b) => `<option value="${b}" ${b === state.brand ? "selected" : ""}>${esc(brandName(b))}</option>`).join("")}</select></label>`
     : "";
+  const count = state.resetRequests ? ` <span class="count" title="Waiting on a new password">${state.resetRequests}</span>` : "";
   app.innerHTML = `
     <header class="topbar"><div class="topbar-in">
       <a href="#/videos" class="home" aria-label="Content Factory, Videos"><img class="logo" src="${BRAND_INFO[state.brand].logo}" alt="${esc(brandName(state.brand))}"><span class="appname">Content Factory</span></a>
-      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}${id === "new" ? "?fresh" : ""}" ${page === id ? 'aria-current="page"' : ""}>${label}${id === "team" && state.resetRequests ? ` <span class="count" title="Waiting on a new password">${state.resetRequests}</span>` : ""}</a>`).join("")}</nav>
-      <div class="who">${brandPick}<span>${esc(state.me.name)}</span><button class="linkbtn" id="signout">Sign out</button></div>
+      <nav class="nav">${nav.map(([id, label]) => `<a href="#/${id}" ${page === id ? 'aria-current="page"' : ""}>${label}${id === "team" ? count : ""}</a>`).join("")}</nav>
+      <div class="tools">
+        ${brandPick}
+        <details class="menu create">
+          <summary class="btn ${creating ? "on" : ""}"><span aria-hidden="true">+</span> Create</summary>
+          <div class="menu-pop">${create.map(([id, label, hint, q]) => `<a href="#/${id}${q}" ${page === id ? 'aria-current="page"' : ""}><b>${label}</b><span>${hint}</span></a>`).join("")}</div>
+        </details>
+        <details class="menu me">
+          <summary class="avatar" aria-label="${esc(state.me.name)}, account menu" title="${esc(state.me.name)}">${esc(initials)}</summary>
+          <div class="menu-pop right">
+            <div class="menu-who"><b>${esc(state.me.name)}</b><span>${esc(brandName(state.brand))}</span></div>
+            <a href="#/account" ${page === "account" ? 'aria-current="page"' : ""}>Account</a>
+            <button type="button" id="signout">Sign out</button>
+          </div>
+        </details>
+      </div>
     </div></header>
     <main>${inner}</main>`;
   $("#signout").onclick = async () => { await api("POST", "/api/logout").catch(() => {}); state.me = null; showLogin(); };
   const pick = $("#brandPick");
   if (pick) pick.onchange = () => { state.brand = pick.value; store("brand", pick.value); paint(state.brand); route(); };
+  // Menus close when you pick something, click elsewhere or press Escape.
+  const menus = [...app.querySelectorAll("details.menu")];
+  menus.forEach((m) => {
+    m.addEventListener("toggle", () => { if (m.open) menus.forEach((o) => { if (o !== m) o.open = false; }); });
+    m.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => { m.open = false; }));
+  });
+}
+if (!window.__menuClose) {
+  window.__menuClose = true;
+  document.addEventListener("click", (e) => document.querySelectorAll("details.menu[open]").forEach((m) => { if (!m.contains(e.target)) m.open = false; }));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.menu[open]").forEach((m) => { m.open = false; m.querySelector("summary").focus(); }); });
 }
 
 function header(eyebrow, title, lead, action = "") {
@@ -230,7 +261,7 @@ function showReset(token) {
 // ---------- videos ----------
 
 async function pageVideos() {
-  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn outline" href="#/store">Store Ad</a><a class="btn" href="#/new?fresh">New Video</a></div>`)}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
+  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first. To make one, use Create.")}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
   // Drafts: videos someone saved to finish later (usually waiting on footage).
   const showDrafts = async () => {
     const { drafts } = await api("GET", `/api/drafts?brand=${state.brand}`);
@@ -493,7 +524,7 @@ async function pageVideo(id) {
 // ---------- Store ad: an InkSoft store link in, a video for the store owner out ----------
 
 async function pageStore() {
-  shell("videos", `${header(brandName(state.brand), "Store Ad", "Paste a store's InkSoft link. The desktop builds a 20 second video from the store's featured products, colors and logo, ready for the store owner to post.")}
+  shell("store", `${header(brandName(state.brand), "Store Ad", "Paste a store's InkSoft link. The desktop builds a 20 second video from the store's featured products, colors and logo, ready for the store owner to post.")}
     <div class="card"><form id="sa"><div id="err"></div>
       <div class="field"><label for="saUrl">Store link</label><input type="text" id="saUrl" placeholder="https://stores.inksoft.com/yourstore" required></div>
       <div class="field"><label for="saNote">A note on screen <span class="muted">(optional)</span></label><input type="text" id="saNote" maxlength="80" placeholder="e.g. Orders close Friday, Nov 7"></div>
