@@ -788,7 +788,7 @@ async function pageNew(params = new URLSearchParams()) {
       voices = r.voices;
     } catch (e) { $("#voiceNote").textContent = e.message; return; }
     const sel = $("#voicePick");
-    sel.insertAdjacentHTML("beforeend", voices.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${[x.gender, x.accent].filter(Boolean).length ? ` (${esc([x.gender, x.accent].filter(Boolean).join(", "))})` : ""}${x.category && x.category !== "premade" ? " · yours" : ""}</option>`).join(""));
+    sel.insertAdjacentHTML("beforeend", voices.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${[x.gender, x.accent].filter(Boolean).length ? ` (${esc([x.gender, x.accent].filter(Boolean).join(", "))})` : ""}${x.category && x.category !== "premade" ? " · your library" : ""}</option>`).join(""));
     if (v.voice && !voices.some((x) => x.id === v.voice)) v.voice = "";
     sel.value = v.voice || "";
     showVoice();
