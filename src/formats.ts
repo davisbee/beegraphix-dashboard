@@ -26,6 +26,8 @@ export interface BeatDef {
   eyebrow?: string;
   /** shown in place of the rank number on product beats ("" shows nothing) */
   badge?: string;
+  /** product beats in Guess the Price: count down, then reveal the product's price */
+  reveal?: boolean;
 }
 
 export interface FormatDef {
@@ -42,6 +44,8 @@ export interface FormatDef {
     linkHint: string;
     /** false hides the style number box (a program has none) */
     style: boolean;
+    /** true asks for each product's price, shown on screen (Guess the Price) */
+    price?: boolean;
   };
   beats: BeatDef[];
   /** "Pick the winner" for This vs That */
@@ -141,6 +145,36 @@ export const FORMATS: FormatDef[] = [
     ctaEyebrow: "Start yours",
     brief: "a program spotlight: the hook (lead with the big number if there is one), the problem, what the program is, how it works in steps, proof, then the payoff",
     titleExample: "Raise More for Your Team With a FAN Fundraiser",
+  },
+  {
+    id: "price",
+    name: "Guess the Price",
+    blurb: "Three products: viewers guess, then the price drops. Built for comments. About 40 seconds.",
+    products: { count: 3, title: "The three products", hint: `Type each one's real price with your logo, e.g. "$28 each". ${PRODUCT_HINT}`, labels: ["#1", "#2", "#3"], nameLabel: "Product name", linkHint: PRODUCT_LINK, style: true, price: true },
+    beats: [0, 1, 2].map((i) => ({
+      id: `g${i + 1}`, kind: "product" as const, product: i, label: `Guess ${i + 1}`, eyebrow: "Guess the price", badge: "", reveal: true,
+      text: "A hint on screen, e.g. With your logo, 24+",
+      write: "Ask them to guess what it costs with their logo. One detail that makes them guess high, then reveal the real price. 2 or 3 short sentences, about 8 seconds.",
+    })),
+    ctaEyebrow: "Get your price",
+    brief: 'a "guess the price" game: the hook (dare them to guess), three products where viewers guess before the real decorated price is revealed, then the payoff',
+    titleExample: "Guess the Price: Custom Carhartt Beanies",
+  },
+  {
+    id: "textstory",
+    name: "Text Story",
+    blurb: 'A "POV" story told in big text: the problem, the turn, the fix. Best faceless, with a voice. About 30 seconds.',
+    products: { count: 1, title: "The fix", hint: PRODUCT_HINT, labels: ["The fix"], nameLabel: "Product or program", linkHint: PRODUCT_LINK, style: true },
+    beats: [
+      { id: "pov", kind: "talk", label: "POV", eyebrow: "POV", text: "The POV line, e.g. The booster club needs 200 shirts by Friday", write: "Set the scene in second person, like a POV caption. One sentence." },
+      { id: "problem", kind: "talk", label: "The problem", text: "What goes wrong, 8 words or fewer", write: "What goes wrong or what's at stake. 1 short sentence." },
+      { id: "turn", kind: "talk", label: "The turn", eyebrow: "Then", text: "The turn, 8 words or fewer", write: "The moment it turns around. 1 short sentence." },
+      { id: "fix", kind: "product", product: 0, label: "The fix", eyebrow: "The fix", badge: "", text: "The fix, 3 to 5 words", write: "This product or program, and how it saved the day. 1 or 2 sentences." },
+      { id: "result", kind: "talk", label: "The result", eyebrow: "The result", text: "The result, e.g. 200 shirts. Friday morning.", write: "How it ended. Real numbers only if the notes give them. 1 sentence." },
+    ],
+    ctaEyebrow: "Your turn",
+    brief: 'a "POV" text story: the hook, a POV line, the problem, the turn, this product as the fix, the result, then the payoff. Short lines that read well as big on-screen text',
+    titleExample: "POV: 200 Shirts by Friday",
   },
 ];
 

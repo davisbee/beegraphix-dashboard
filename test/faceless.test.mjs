@@ -93,3 +93,24 @@ test("bad looks and transitions are refused", async () => {
   assert.match(s.data.error, /Pick a look/, "showcase is only for faceless videos");
   await features(["heygen"]);
 });
+
+test("Guess the Price needs a price per product and puts it on each reveal beat", async () => {
+  await features(["heygen", "showcase"]);
+  const early = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ template: "price", title: "Too Early", beats: {} }) });
+  assert.match(early.data.error, /Guess the Price needs a desktop update/);
+  await features(["heygen", "showcase", "price-story"]);
+  await drain();
+  const three = (price) => [1, 2, 3].map((i) => ({ name: `Product ${i}`, style: `GP${i}`, link: "", script: `Guess ${i}.`, shortName: "", tag: "", photo: null, ...(price ? { price: `$${i}0 each` } : {}) }));
+  const s = (products) => spec({ template: "price", title: "Guess the Price Test", products, beats: {} });
+  const missing = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s(three(false)) });
+  assert.match(missing.data.error, /needs its price/);
+  const ok = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s(three(true)) });
+  assert.equal(ok.status, 201, JSON.stringify(ok.data));
+  const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.deepEqual(job.payload.spec.beats.map((b) => b.price), ["$10 each", "$20 each", "$30 each"]);
+  assert.equal(job.payload.spec.products[0].price, "$10 each");
+  await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
+  const f = (await call("GET", "/api/formats", T.bgx)).data.formats.map((x) => x.id);
+  assert.ok(f.includes("price") && f.includes("textstory"));
+  await features(["heygen"]);
+});
