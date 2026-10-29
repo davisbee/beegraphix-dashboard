@@ -2,10 +2,13 @@
 // "AI avatar" on New video (stage 2): submitting starts one HeyGen clip per line, and the desktop waits for
 // them, downloads them and frames them (Content Factory scripts/lib/heygen.mjs).
 //
-//   GET  /api/heygen/available       anyone signed in: {available, reason?, look?}  can New video offer it now
-//   GET  /api/heygen                 {ready, choice, test}  is the key set, which look, the last test clip
+//   GET  /api/heygen/available       anyone signed in: {available, reason?, look?, looks?}  can New video offer it now,
+//                                    and which avatars staff can pick from (look is the default)
+//   GET  /api/heygen                 {ready, choice, looks, test}  is the key set, the default, the avatars on offer, the last test
 //   GET  /api/heygen/looks           the account's own avatar looks (private), to pick from
-//   PUT  /api/heygen/choice          {id, name, preview?}   the look every AI-avatar video uses
+//   PUT  /api/heygen/choice          {id, name, preview?}   the default look (also puts it on offer)
+//   POST /api/heygen/roster          {id, name, preview?}   offer one more avatar on New video
+//   DELETE /api/heygen/roster/:id                           stop offering it (the default moves to the next one)
 //   POST /api/heygen/test            {mode: "clear" | "green"}  make a short test clip (uses HeyGen credits)
 //   GET  /api/heygen/test/refresh    ask HeyGen how the test clip is doing; copies it here when done
 //   GET  /api/heygen/test/video      the saved test clip
@@ -14,7 +17,7 @@
 // API: https://developers.heygen.com (v3). Videos: POST /v3/videos {type: "avatar", avatar_id: <look id>, script,
 // output_format: "webm"} gives a transparent clip when the look was trained with matting. With no voice_id the
 // look's own voice speaks. HeyGen's links expire, so finished clips are copied into R2 straight away.
-// The choice lives in R2 (settings/heygen.json) so no database migration is needed. The option only turns on
+// The choice and the avatars on offer live in R2 (settings/heygen.json) so no database migration is needed. The option only turns on
 // once the desktop says it can handle HeyGen clips (it sends features with its catalog: settings/desktop.json).
 //
 //   Desktop: GET /api/desktop/heygen/:videoId -> {status, url, message}  a fresh download link when it's done
@@ -29,7 +32,9 @@ export const GREEN = "#00B140";
 
 export interface Look { id: string; name: string; preview: string | null; type: string | null }
 interface Test { videoId: string; mode: "clear" | "green"; status: string; startedAt: string; message?: string; saved?: string; type?: string }
-interface Settings { choice: Look | null; test: Test | null }
+interface Settings { choice: Look | null; looks: Look[]; test: Test | null }
+/** How many avatars New video can offer at once. */
+export const MAX_LOOKS = 12;
 
 function admin(c: Caller) {
   if (!c.admin) throw new HttpError(403, "Only an admin can set up the AI avatar");
@@ -59,16 +64,29 @@ export async function heygen(env: Env, path: string, init: RequestInit = {}): Pr
 
 async function load(env: Env): Promise<Settings> {
   const o = await env.MEDIA.get(SETTINGS);
-  if (!o) return { choice: null, test: null };
-  try { const v = await o.json<Partial<Settings>>(); return { choice: v.choice ?? null, test: v.test ?? null }; } catch { return { choice: null, test: null }; }
+  if (!o) return { choice: null, looks: [], test: null };
+  try {
+    const v = await o.json<Partial<Settings>>();
+    const choice = v.choice ?? null;
+    // Saved before there was a list: the one picked look is the whole list.
+    const looks = Array.isArray(v.looks) ? v.looks : choice ? [choice] : [];
+    return { choice, looks, test: v.test ?? null };
+  } catch { return { choice: null, looks: [], test: null }; }
 }
 async function save(env: Env, s: Settings) {
   await env.MEDIA.put(SETTINGS, JSON.stringify(s), { httpMetadata: { contentType: "application/json" } });
 }
 
-/** The look AI-avatar videos use, or null when none is picked yet. */
+/** The default look AI-avatar videos use, or null when none is picked yet. */
 export async function chosenLook(env: Env) {
   return (await load(env)).choice;
+}
+
+/** The avatar a build asked for: one on offer by id, or the default when it named none. Null when that look isn't on offer. */
+export async function lookFor(env: Env, id: unknown) {
+  const s = await load(env);
+  if (id === undefined || id === null || id === "") return s.choice;
+  return s.looks.find((l) => l.id === id) ?? null;
 }
 
 // HeyGen's list responses have been shaped a few ways; take whichever array is there.
@@ -101,14 +119,44 @@ async function looks(env: Env) {
   return json({ looks: listOf(out, "looks", "items", "avatar_looks").map(toLook).filter(Boolean) });
 }
 
-async function setChoice(req: Request, env: Env) {
+async function lookFrom(req: Request): Promise<Look> {
   const b = await body<{ id?: string; name?: string; preview?: string | null; type?: string | null }>(req);
   if (typeof b.id !== "string" || !/^[\w.:-]{1,200}$/.test(b.id)) throw new HttpError(400, "Pick a look");
+  return { id: b.id, name: String(b.name ?? "").slice(0, 120) || "Avatar", preview: typeof b.preview === "string" ? b.preview.slice(0, 2000) : null, type: typeof b.type === "string" ? b.type.slice(0, 40) : null };
+}
+
+function offer(s: Settings, look: Look) {
+  const i = s.looks.findIndex((l) => l.id === look.id);
+  if (i >= 0) { s.looks[i] = look; return; }
+  if (s.looks.length >= MAX_LOOKS) throw new HttpError(400, `New video can offer up to ${MAX_LOOKS} avatars. Remove one first.`);
+  s.looks.push(look);
+}
+
+async function setChoice(req: Request, env: Env) {
+  const look = await lookFrom(req);
   const s = await load(env);
-  s.choice = { id: b.id, name: String(b.name ?? "").slice(0, 120) || "Avatar", preview: typeof b.preview === "string" ? b.preview.slice(0, 2000) : null, type: typeof b.type === "string" ? b.type.slice(0, 40) : null };
+  offer(s, look);
+  s.choice = look;
   if (s.test) s.test = null; // a test belongs to the look it was made with
   await save(env, s);
-  return json({ choice: s.choice });
+  return json({ choice: s.choice, looks: s.looks });
+}
+
+async function addLook(req: Request, env: Env) {
+  const look = await lookFrom(req);
+  const s = await load(env);
+  offer(s, look);
+  if (!s.choice) s.choice = look; // the first one on offer is the default
+  await save(env, s);
+  return json({ choice: s.choice, looks: s.looks });
+}
+
+async function removeLook(env: Env, id: string) {
+  const s = await load(env);
+  s.looks = s.looks.filter((l) => l.id !== id);
+  if (s.choice?.id === id) { s.choice = s.looks[0] ?? null; s.test = null; }
+  await save(env, s);
+  return json({ choice: s.choice, looks: s.looks });
 }
 
 /** Starts a HeyGen avatar video. mode "clear" asks for a transparent WebM; "green" a solid green MP4 to key. */
@@ -255,19 +303,26 @@ export async function heygenRoute(req: Request, url: URL, env: Env, c: Caller, p
   if (!p.startsWith("/api/heygen")) return null;
   if (p === "/api/heygen/available" && req.method === "GET") {
     const a = await avatarAvailability(env);
-    return json(a.available ? { available: true, look: { name: a.look.name }, usdPerMinute: USD_PER_MINUTE } : a);
+    if (!a.available) return json(a);
+    const { looks } = await load(env);
+    const pick = (l: Look) => ({ id: l.id, name: l.name, preview: l.preview });
+    return json({ available: true, look: pick(a.look), looks: (looks.length ? looks : [a.look]).map(pick), usdPerMinute: USD_PER_MINUTE });
   }
+  // New video shows the avatars' pictures to everyone, so the image proxy isn't admin-only.
+  if (p === "/api/heygen/preview" && req.method === "GET") return preview(url);
   admin(c);
   const m = req.method;
   if (p === "/api/heygen" && m === "GET") {
     const s = await load(env);
-    return json({ ready: Boolean(env.HEYGEN_API_KEY), choice: s.choice, test: s.test });
+    return json({ ready: Boolean(env.HEYGEN_API_KEY), choice: s.choice, looks: s.looks, test: s.test });
   }
+  if (p === "/api/heygen/roster" && m === "POST") return addLook(req, env);
+  const rm = p.match(/^\/api\/heygen\/roster\/([^/]+)$/);
+  if (rm && m === "DELETE") return removeLook(env, decodeURIComponent(rm[1]));
   if (p === "/api/heygen/looks" && m === "GET") return looks(env);
   if (p === "/api/heygen/choice" && m === "PUT") return setChoice(req, env);
   if (p === "/api/heygen/test" && m === "POST") return startTest(req, env, c);
   if (p === "/api/heygen/test/refresh" && m === "GET") return refreshTest(env);
   if (p === "/api/heygen/test/video" && m === "GET") return testVideo(req, env);
-  if (p === "/api/heygen/preview" && m === "GET") return preview(url);
   throw new HttpError(404, "Not found");
 }

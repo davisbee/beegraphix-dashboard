@@ -693,6 +693,9 @@ async function pageNew(params = new URLSearchParams()) {
   // The AI avatar: on only when HeyGen is connected, an admin picked the look, and the desktop is up to date.
   const av = await api("GET", "/api/heygen/available").catch(() => ({ available: false, reason: "Couldn't check" }));
   if (v.presenter.mode === "heygen" && !av.available) v.presenter.mode = "self";
+  const avLooks = av.available ? (av.looks?.length ? av.looks : [av.look]) : [];
+  if (!avLooks.some((l) => l.id === v.presenter.lookId)) v.presenter.lookId = av.look?.id ?? ""; // a removed avatar falls back to the default
+  const avLook = () => avLooks.find((l) => l.id === v.presenter.lookId) ?? avLooks[0];
   // Faceless videos and transition choices need the desktop that knows the Showcase template.
   const feats = await api("GET", "/api/features").catch(() => ({ showcase: false }));
   if (v.presenter.mode === "none" && !feats.showcase) v.presenter.mode = "self";
@@ -774,7 +777,7 @@ async function pageNew(params = new URLSearchParams()) {
       <div class="choices three" style="margin-top:12px">
         ${choice("presenter", "self", "Record yourself", "Film each line on your phone and upload it below.")}
         ${choice("presenter", "none", "No presenter (faceless)", feats.showcase ? "Products, bold text and music. Nothing to film." : "Not available yet: needs a desktop update.", !feats.showcase)}
-        ${choice("presenter", "heygen", "AI avatar (HeyGen)", av.available ? `${av.look.name} says each line. Uses HeyGen credits, and the video is labeled AI.` : `Not available yet: ${av.reason}.`, !av.available)}
+        ${choice("presenter", "heygen", "AI avatar (HeyGen)", av.available ? `${avLooks.length > 1 ? "Pick an avatar below. It" : `${esc(av.look.name)}`} says each line. Uses HeyGen credits, and the video is labeled AI.` : `Not available yet: ${av.reason}.`, !av.available)}
       </div>
       <div class="grid2" style="margin-top:18px" id="nameBox">
         <div class="field"><label for="prName">Name on screen</label><input type="text" id="prName" data-k="presenter.name"></div>
@@ -790,6 +793,7 @@ async function pageNew(params = new URLSearchParams()) {
         <p class="small muted" id="voiceNote" style="margin:8px 0 0">${feats.voiceover ? "" : "Voiceovers need a desktop update."}</p>
         <audio id="voiceAudio" hidden></audio></div>
       <div id="avatarBox" hidden><h3 class="sub">AI avatar</h3>
+        ${avLooks.length > 1 ? `<div class="looks pick" role="radiogroup" aria-label="AI avatar" style="margin:0 0 14px">${avLooks.map((l) => `<label class="look">${lookImg(l)}<span class="meta"><span class="check"><input type="radio" name="avatarLook" value="${esc(l.id)}" ${l.id === v.presenter.lookId ? "checked" : ""}><b>${esc(l.name)}</b></span></span></label>`).join("")}</div>` : ""}
         <p class="muted small" style="margin:0">HeyGen makes one clip per line when you press Build. Nothing to film or upload. The video shows an "AI avatar" label the whole time.</p>
         <p class="small" id="avatarCost" style="margin:10px 0 0"></p></div>
       <div id="footageBox">
@@ -897,6 +901,7 @@ async function pageNew(params = new URLSearchParams()) {
     else if (el.name === "goal" || el.name === "look") v[el.name] = el.value;
     else if (el.name === "winner") v.winner = Number(el.value);
     else if (el.name === "presenter") { v.presenter.mode = el.value; save(); showPresenter(); return; }
+    else if (el.name === "avatarLook") { v.presenter.lookId = el.value; save(); return; }
     else if (el.name === "template") {
       // Each format keeps its own products: switching never carries a Top 5 shirt into a Product Spotlight (or a program).
       v.shelf = { ...(v.shelf || {}), [v.template]: v.products };
@@ -1135,13 +1140,13 @@ async function pageNew(params = new URLSearchParams()) {
     e.preventDefault();
     const err = $("#err");
     if (busy.size) { err.innerHTML = `<div class="error">Wait for the uploads to finish first.</div>`; return; }
-    if (v.presenter.mode === "heygen" && !confirm(`The AI avatar uses about $${avatarEstimate().usd.toFixed(2)} of HeyGen credits. Build it?`)) return;
+    if (v.presenter.mode === "heygen" && !confirm(`${avLook()?.name ?? "The AI avatar"} uses about $${avatarEstimate().usd.toFixed(2)} of HeyGen credits. Build it?`)) return;
     const btn = $("#buildBtn");
     btn.disabled = true;
     try {
       const spec = {
         template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.presenter.mode === "none" ? "showcase" : v.look, winner: v.winner,
-        presenter: { mode: ["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self", name: v.presenter.name, title: v.presenter.title },
+        presenter: { mode: ["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self", name: v.presenter.name, title: v.presenter.title, ...(v.presenter.mode === "heygen" && v.presenter.lookId ? { lookId: v.presenter.lookId } : {}) },
         ...(v.transition ? { transition: v.transition } : {}),
         ...(v.presenter.mode === "none" && v.voice ? { voice: v.voice } : {}),
         ...(f.logo && v.logo ? { logo: v.logo, logoSpot: v.logoSpot || "left-chest" } : {}),
@@ -1251,31 +1256,48 @@ async function pageTeam() {
 
 // ---------- account ----------
 
-// ---------- AI avatar (admins): pick the HeyGen look, make a test clip ----------
+// ---------- AI avatar (admins): pick which HeyGen avatars New video offers, make a test clip ----------
 
 const lookImg = (l) => (l.preview ? `<img src="/api/heygen/preview?u=${encodeURIComponent(l.preview)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'noimg'}))">` : '<div class="noimg"></div>');
 
 async function pageAvatar() {
   if (state.me.role !== "admin") { location.hash = "#/videos"; return; }
-  shell("avatar", `${header("Setup", "AI avatar", "Pick the HeyGen look that AI-avatar videos use, then make one short test clip to check it.")}
+  shell("avatar", `${header("Setup", "AI avatar", "Pick which HeyGen avatars staff can choose on New video, and which one is picked to start. Then make a short test clip to check the default.")}
     <div id="keyNote"></div>
-    <div class="card"><h2>Your look</h2><div id="chosen"><p class="muted">Loading…</p></div></div>
-    <div class="card"><h2>Pick a look</h2><p class="muted small" style="margin:0 0 16px">Your own avatars from HeyGen. Stock avatars aren't shown.</p>
+    <div class="card"><h2>On New video</h2><p class="muted small" style="margin:0 0 16px">Staff pick one of these when they choose "AI avatar". The default is picked to start. Each avatar speaks in its own HeyGen voice.</p>
+      <div id="chosen"><p class="muted">Loading…</p></div></div>
+    <div class="card"><h2>Add avatars</h2><p class="muted small" style="margin:0 0 16px">Your own avatars from HeyGen. Stock avatars aren't shown.</p>
       <div id="looks"><button class="btn outline" type="button" id="loadLooks">Show My Looks</button></div></div>
     <div class="card"><h2>Test clip</h2>
-      <p class="muted small" style="margin:0 0 16px">One sentence, about 8 seconds. It uses HeyGen credits. "Clear background" is what the factory wants; if HeyGen says your look can't do it, try green.</p>
+      <p class="muted small" style="margin:0 0 16px">Uses the default avatar. One sentence, about 8 seconds, and it uses HeyGen credits. "Clear background" is what the factory wants; if HeyGen says a look can't do it, try green.</p>
       <div class="row"><button class="btn" type="button" data-test="clear">Make Test Clip</button><button class="btn outline" type="button" data-test="green">Try Green Background</button></div>
       <div id="testOut" style="margin-top:16px"></div></div>`);
 
   let info = await api("GET", "/api/heygen");
   if (!info.ready) $("#keyNote").innerHTML = `<div class="notice"><b>HeyGen isn't connected yet.</b> Add <code>HEYGEN_API_KEY</code> as a secret on the content-factory-dashboard Worker in Cloudflare.</div>`;
 
+  info.looks ??= info.choice ? [info.choice] : [];
+  const offered = (id) => info.looks.some((l) => l.id === id);
+  const update = (r) => { info.test = r.choice?.id === info.choice?.id ? info.test : null; info.choice = r.choice; info.looks = r.looks; showChosen(); showTest(); };
   const showChosen = () => {
-    const l = info.choice;
-    $("#chosen").innerHTML = l
-      ? `<div class="looks"><div class="look on">${lookImg(l)}<div class="meta"><b>${esc(l.name)}</b>${l.type ? `<span class="small muted">${esc(l.type)}</span>` : ""}</div></div></div>`
-      : `<p class="muted">None picked yet.</p>`;
-    document.querySelectorAll("[data-test]").forEach((b) => { b.disabled = !l || !info.ready; });
+    const ls = info.looks;
+    $("#chosen").innerHTML = ls.length
+      ? `<div class="looks">${ls.map((l, i) => { const def = info.choice?.id === l.id; return `<div class="look ${def ? "on" : ""}">${lookImg(l)}<div class="meta"><b>${esc(l.name)}</b>${def ? `<span class="tag">Default</span>` : ""}
+          <div class="row" style="gap:8px">${def ? "" : `<button class="btn small" type="button" data-default="${i}">Make Default</button>`}<button class="btn outline small" type="button" data-remove="${i}">Remove</button></div></div></div>`; }).join("")}</div>`
+      : `<p class="muted">None yet. Add one below.</p>`;
+    document.querySelectorAll("[data-test]").forEach((b) => { b.disabled = !info.choice || !info.ready; });
+    document.querySelectorAll("[data-default]").forEach((b) => {
+      b.onclick = async () => {
+        try { update(await api("PUT", "/api/heygen/choice", ls[Number(b.dataset.default)])); } catch (e) { alert(e.message); }
+      };
+    });
+    document.querySelectorAll("[data-remove]").forEach((b) => {
+      b.onclick = async () => {
+        const l = ls[Number(b.dataset.remove)];
+        if (!confirm(`Stop offering ${l.name} on New video?`)) return;
+        try { update(await api("DELETE", `/api/heygen/roster/${encodeURIComponent(l.id)}`)); if ($("#lookGrid")) loadLooks(); } catch (e) { alert(e.message); }
+      };
+    });
   };
 
   const showTest = () => {
@@ -1305,14 +1327,14 @@ async function pageAvatar() {
     try {
       const { looks } = await api("GET", "/api/heygen/looks");
       if (!looks.length) { $("#looks").innerHTML = `<p class="muted">HeyGen didn't return any looks of your own.</p>`; return; }
-      $("#looks").innerHTML = `<div class="looks">${looks.map((l, i) => `<div class="look ${info.choice?.id === l.id ? "on" : ""}">${lookImg(l)}
+      $("#looks").innerHTML = `<div class="looks" id="lookGrid">${looks.map((l, i) => `<div class="look">${lookImg(l)}
         <div class="meta"><b>${esc(l.name)}</b>${l.type ? `<span class="small muted">${esc(l.type)}</span>` : ""}
-        <button class="btn small" type="button" data-pick="${i}">${info.choice?.id === l.id ? "In Use" : "Use This"}</button></div></div>`).join("")}</div>`;
+        ${offered(l.id) ? `<button class="btn outline small" type="button" disabled>Added</button>` : `<button class="btn small" type="button" data-pick="${i}">Add</button>`}</div></div>`).join("")}</div>`;
       document.querySelectorAll("[data-pick]").forEach((b) => {
         b.onclick = async () => {
-          const l = looks[Number(b.dataset.pick)];
-          try { info.choice = (await api("PUT", "/api/heygen/choice", l)).choice; info.test = null; showChosen(); showTest(); loadLooks(); }
-          catch (e) { alert(e.message); }
+          b.disabled = true;
+          try { update(await api("POST", "/api/heygen/roster", looks[Number(b.dataset.pick)])); loadLooks(); }
+          catch (e) { alert(e.message); b.disabled = false; }
         };
       });
     } catch (e) { $("#looks").innerHTML = `<div class="notice">${esc(e.message)}</div>`; }
