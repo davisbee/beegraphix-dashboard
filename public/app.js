@@ -536,7 +536,7 @@ function blankVideo() {
     template: "top5", goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "", beats: {}, winner: 0,
     presenter: { mode: "self", name: state.me.name, title: "" },
     hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false, transition: "", voice: "",
-    products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "" })),
+    products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "", price: "" })),
     footage: {}, footageNames: {},
   };
 }
@@ -674,6 +674,7 @@ async function pageNew(params = new URLSearchParams()) {
           <div class="field wide"><label for="pl${i}">Link</label><input type="text" id="pl${i}" data-k="products.${i}.link" data-link="${i}" placeholder="${esc(f.products.linkHint)}"><div class="hint" data-linkstate="${i}"></div></div>
           <div class="field${f.products.style ? "" : " wide"}"><label for="pn${i}">${esc(f.products.nameLabel)}</label><input type="text" id="pn${i}" data-k="products.${i}.name"></div>
           ${f.products.style ? `<div class="field"><label for="ps${i}">Style number</label><input type="text" id="ps${i}" data-k="products.${i}.style" data-stylebox="${i}" placeholder="e.g. 5000 or Gildan 5000"></div>` : ""}
+          ${f.products.price ? `<div class="field"><label for="pp${i}">Price on screen</label><input type="text" id="pp${i}" data-k="products.${i}.price" maxlength="24" placeholder="e.g. $28 each"></div>` : ""}
           <div class="wide">${slot(`photo${i}`, "Photo", "image/jpeg,image/png,image/webp", "No photo yet")}<div class="colors" data-colors="${i}" hidden></div></div>
         </div></div>`).join("")}
       ${f.winner ? `<h3 class="sub">Who wins?</h3><div class="choices two">${choice("winner", "0", "A", "Product A wins")}${choice("winner", "1", "B", "Product B wins")}</div>` : ""}
@@ -1014,7 +1015,7 @@ async function pageNew(params = new URLSearchParams()) {
     try {
       const { draft, unread = [] } = await api("POST", `/api/draft?brand=${state.brand}`, {
         template: f.id, goal: v.goal, audience: v.audience, topic: v.topic, notes: v.notes, presenter: v.presenter.name, winner: v.winner,
-        products: prods.map((p) => ({ name: p.name, link: p.link })),
+        products: prods.map((p) => ({ name: p.name, link: p.link, price: p.price })),
       });
       v.hook = draft.hook;
       v.hookText = draft.hookText;

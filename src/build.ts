@@ -28,6 +28,8 @@ export interface BuildProduct {
   link: string;
   script: string;
   photo: string | null;
+  /** Guess the Price: the price shown on screen, as typed (e.g. "$28 each") */
+  price?: string;
 }
 
 export interface BuildBeat {
@@ -39,6 +41,8 @@ export interface BuildBeat {
   text?: string;
   eyebrow?: string;
   badge?: string;
+  /** Guess the Price: the price this beat reveals */
+  price?: string;
 }
 
 export interface BuildSpec {
@@ -90,6 +94,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   const title = str(r.title, 120);
   if (title.length < 4) throw new HttpError(400, "Give the video a title");
   if (!GOALS.includes(r.goal)) throw new HttpError(400, "Pick a goal: reach, target or sell");
+  if ((f.id === "price" || f.id === "textstory") && !(await desktopCan(env, "price-story"))) throw new HttpError(400, `${f.name} needs a desktop update first`);
   const mode = r.presenter?.mode;
   if (mode !== "self" && mode !== "heygen" && mode !== "none") throw new HttpError(400, "Pick who's on camera: record yourself, the AI avatar, or no one");
   // Faceless videos always render with the Showcase template; videos with a presenter never do.
@@ -130,7 +135,9 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
     const style = f.products.style ? str(p?.style, 20).toUpperCase().replace(/[^A-Z0-9-]/g, "") : "";
     const photo = p?.photo ? String(p.photo) : null;
     if (photo && !UUID.test(photo)) throw new HttpError(400, `${what}: bad photo`);
-    return { name, shortName: str(p?.shortName, 40) || name.slice(0, 40), tag: str(p?.tag, 60), style, link: link(p?.link, `${what}'s link`), script: scripted.has(i) ? script : "", photo };
+    const price = f.products.price ? str(p?.price, 24) : "";
+    if (f.products.price && !price) throw new HttpError(400, `${what} needs its price, e.g. $28 each`);
+    return { name, shortName: str(p?.shortName, 40) || name.slice(0, 40), tag: str(p?.tag, 60), style, link: link(p?.link, `${what}'s link`), script: scripted.has(i) ? script : "", photo, ...(price ? { price } : {}) };
   });
   const styles = products.map((p) => p.style).filter(Boolean);
   if (new Set(styles).size !== styles.length) throw new HttpError(400, "Two products have the same style number");
@@ -148,6 +155,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
       ...(text ? { text } : {}),
       ...(b.eyebrow ? { eyebrow: b.eyebrow } : {}),
       ...(b.badge !== undefined ? { badge: b.badge } : {}),
+      ...(b.reveal && b.product !== undefined && products[b.product].price ? { price: products[b.product].price } : {}),
     };
   });
   let winner: number | undefined;
@@ -224,10 +232,10 @@ const DraftSchema = z.object({
 /** POST /api/draft: Claude writes the hook, each beat and the payoff in the presenter's voice. */
 export async function draftScript(req: Request, env: Env, c: Caller, brand: string) {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(503, "Draft It For Me isn't switched on yet. Write the script yourself for now.");
-  const b = await body<{ template?: string; goal?: string; audience?: string; topic?: string; notes?: string; presenter?: string; winner?: number; products?: Array<{ name?: string; link?: string }> }>(req);
+  const b = await body<{ template?: string; goal?: string; audience?: string; topic?: string; notes?: string; presenter?: string; winner?: number; products?: Array<{ name?: string; link?: string; price?: string }> }>(req);
   const f = formatOf(b.template);
   if (!f) throw new HttpError(400, "Pick a format");
-  const products = (Array.isArray(b.products) ? b.products : []).slice(0, f.products.count).map((p) => ({ name: str(p?.name, 120), link: str(p?.link, 300) }));
+  const products = (Array.isArray(b.products) ? b.products : []).slice(0, f.products.count).map((p) => ({ name: str(p?.name, 120), link: str(p?.link, 300), price: str(p?.price, 24) }));
   if (products.length !== f.products.count || products.some((p) => !p.name)) throw new HttpError(400, f.products.count === 1 ? `Name the ${f.products.nameLabel.toLowerCase()} first` : `Name all ${f.products.count} products first`);
   const goal = GOALS.includes(b.goal as any) ? b.goal! : "reach";
 
@@ -250,7 +258,7 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
     b.audience ? `Audience: ${str(b.audience, 200)}` : "",
     b.topic ? `What the video is about: ${str(b.topic, 300)}` : "",
     `${f.products.title}:`,
-    ...products.map((p, i) => `${f.products.labels[i]}: ${p.name}${p.link ? ` (${p.link})` : ""}`),
+    ...products.map((p, i) => `${f.products.labels[i]}: ${p.name}${p.link ? ` (${p.link})` : ""}${p.price ? `. Real price to reveal: ${p.price}` : ""}`),
     f.winner ? `The winner is ${f.products.labels[Number(b.winner) === 1 ? 1 : 0]}.` : "",
     "The beats, in order (use these ids):",
     ...f.beats.map((x) => `- ${x.id} (${x.label}${x.product !== undefined ? `, about ${f.products.labels[x.product]}` : ""}): ${x.write}${x.text ? ` On screen: ${x.text}${x.textKind === "list" ? ", one per line" : ""}.` : " No on-screen text."}`),
