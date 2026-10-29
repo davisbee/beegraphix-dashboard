@@ -182,5 +182,19 @@ test("store ads: a Chipply pop-up store link goes to the desktop even when Chipp
   assert.doesNotMatch(job.payload.spec.caption, /—/, "no em dashes");
   await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
   assert.match((await call("POST", "/api/jobs", T.bgx, sa({ storeUrl: "https://chipply.com/" }))).data.error, /InkSoft or Chipply link/);
+  // a close date typed on the page wins, in Eastern time, and has to be ahead
+  assert.match((await call("POST", "/api/jobs", T.bgx, sa({ endsDate: "2020-11-02", endsTime: "13:30" }))).data.error, /already passed/);
+  assert.match((await call("POST", "/api/jobs", T.bgx, sa({ endsDate: "nope" }))).data.error, /date/);
+  const typed = await call("POST", "/api/jobs", T.bgx, sa({ endsDate: "2099-11-02", endsTime: "13:30" }));
+  assert.equal(typed.status, 201, JSON.stringify(typed.data));
+  const tj = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(tj.payload.spec.endsAt, "2099-11-02T13:30:00-05:00", "November is Eastern standard time");
+  assert.match(tj.payload.spec.caption, /Orders close Mon, Nov 2 at 1:30 PM\./);
+  await call("POST", `/api/desktop/jobs/${tj.id}/fail`, T.worker, { message: "test" });
+  const summer = await call("POST", "/api/jobs", T.bgx, sa({ endsDate: "2099-07-04", endsTime: "09:05" }));
+  const sj = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(summer.status, 201);
+  assert.equal(sj.payload.spec.endsAt, "2099-07-04T09:05:00-04:00", "July is daylight time");
+  await call("POST", `/api/desktop/jobs/${sj.id}/fail`, T.worker, { message: "test" });
   await features(["heygen"]);
 });
