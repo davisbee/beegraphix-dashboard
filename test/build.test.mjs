@@ -298,3 +298,27 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.equal((await call("GET", `/api/jobs/${rb.data.id}/post`, T.rugbee)).data.supported, false);
   await drain();
 });
+
+test("a store ad's social images: the desktop sends one zip, staff download it", async () => {
+  const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec() });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  const id = made.data.id;
+  const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(job.id, id);
+  const zip = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from("fake zip body")]);
+  assert.equal((await call("PUT", `/api/desktop/jobs/${id}/images`, T.worker, null, Buffer.from("not a zip"))).status, 400, "zip only");
+  assert.equal((await call("PUT", `/api/desktop/jobs/${id}/images`, T.bgx, null, zip)).status, 401, "desktop only");
+  assert.equal((await call("PUT", `/api/desktop/jobs/${id}/images`, T.worker, null, zip)).status, 200);
+  assert.equal((await call("GET", `/api/jobs/${id}`, T.bgx)).data.hasImages, false, "shown once the video is done");
+  await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
+  const part = await call("PUT", `/api/desktop/jobs/${id}/upload/part?n=1`, T.worker, null, Buffer.from("fake mp4"));
+  assert.equal((await call("POST", `/api/desktop/jobs/${id}/upload/complete`, T.worker, { parts: [part.data] })).status, 200);
+  assert.equal((await call("GET", `/api/jobs/${id}`, T.bgx)).data.hasImages, true);
+  const dl = await fetch(`${BASE}/api/jobs/${id}/images`, { headers: { authorization: `Bearer ${T.bgx}` } });
+  assert.equal(dl.status, 200);
+  assert.equal(dl.headers.get("content-type"), "application/zip");
+  assert.match(dl.headers.get("content-disposition") ?? "", /attachment; filename=".+-images\.zip"/);
+  assert.ok(Buffer.from(await dl.arrayBuffer()).equals(zip));
+  assert.equal((await fetch(`${BASE}/api/jobs/${id}/images`, { headers: { authorization: `Bearer ${T.rugbee}` } })).status, 404, "other brand");
+  assert.equal((await call("PUT", `/api/desktop/jobs/${id}/images`, T.worker, null, zip)).status, 409, "not after the job is done");
+});

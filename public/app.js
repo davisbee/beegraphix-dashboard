@@ -474,6 +474,7 @@ async function pageVideo(id) {
       j.hasVideo ? `<a class="btn" href="/api/jobs/${j.id}/video?download">Download</a>` : "",
       j.payload.spec && !storeAd ? `<button class="btn outline" type="button" id="copyScript">Copy Script</button>` : "",
       storeAd && j.payload.spec.caption ? `<button class="btn outline" type="button" id="copyCaption">Copy Caption</button>` : "",
+      j.hasImages ? `<a class="btn outline" href="/api/jobs/${j.id}/images">Download Images (.zip)</a>` : "",
       j.status === "queued" ? `<button class="btn outline" id="cancel">Cancel</button>` : "",
       ["done", "failed", "cancelled"].includes(j.status) ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
     ].join("");
