@@ -474,6 +474,7 @@ async function pageVideo(id) {
       j.hasVideo ? `<a class="btn" href="/api/jobs/${j.id}/video?download">Download</a>` : "",
       j.payload.spec && !storeAd ? `<button class="btn outline" type="button" id="copyScript">Copy Script</button>` : "",
       storeAd && j.payload.spec.caption ? `<button class="btn outline" type="button" id="copyCaption">Copy Caption</button>` : "",
+      j.hasImages ? `<a class="btn outline" href="/api/jobs/${j.id}/images">Download Images (.zip)</a>` : "",
       j.status === "queued" ? `<button class="btn outline" id="cancel">Cancel</button>` : "",
       ["done", "failed", "cancelled"].includes(j.status) ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
     ].join("");
@@ -521,14 +522,14 @@ async function pageVideo(id) {
   try { await refresh(); } catch (e) { $("#detail").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
 }
 
-// ---------- Store ad: an InkSoft store link in, a video for the store owner out ----------
+// ---------- Store ad: an InkSoft or Chipply pop-up store link in, a video for the store owner out ----------
 
 async function pageStore() {
-  shell("store", `${header(brandName(state.brand), "Store Ad", "Paste a store's InkSoft link. The desktop builds a 20 second video from the store's featured products, colors and logo, ready for the store owner to post.")}
+  shell("store", `${header(brandName(state.brand), "Store Ad", "Paste an InkSoft store or a Chipply pop-up store link. The desktop builds a short video and social images from the store's products, colors and logo, ready for the store owner to post.")}
     <div class="card"><form id="sa"><div id="err"></div>
-      <div class="field"><label for="saUrl">Store link</label><input type="text" id="saUrl" placeholder="https://stores.inksoft.com/yourstore" required></div>
+      <div class="field"><label for="saUrl">Store link</label><input type="text" id="saUrl" placeholder="stores.inksoft.com/yourstore or beegraphix.chipply.com/yourstore" required></div>
       <div class="field"><label for="saNote">A note on screen <span class="muted">(optional)</span></label><input type="text" id="saNote" maxlength="80" placeholder="e.g. Orders close Friday, Nov 7"></div>
-      <p class="small muted" style="margin:0 0 16px">It uses the store's Featured Products, in the order the owner set them. Change those in InkSoft to change the video.</p>
+      <p class="small muted" style="margin:0 0 16px">InkSoft: it uses the store's Featured Products, in the order the owner set them. Chipply: it uses the store's products in their order (youth versions fold into the adult one), and shows when the sale ends if the store has a countdown.</p>
       <div class="row"><button class="btn" type="submit" id="saBuild">Build Store Ad</button><a class="btn outline" href="#/videos">Cancel</a></div>
     </form></div>`);
   const feats = await api("GET", "/api/features").catch(() => ({}));

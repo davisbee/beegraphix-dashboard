@@ -28,6 +28,7 @@
 //     GET/PUT /api/jobs/:id/post      approve and post: the page copy and captions for a finished video (posts.ts)
 //     POST /api/jobs/:id/post/draft   Claude writes them    POST .../preview  desktop makes the images and a preview link
 //     GET  /api/jobs/:id/stills/:name one of the social images the last preview made (carousel-1, teaser-1-feed...)
+//     GET  /api/jobs/:id/images       a store ad's social images, one .zip
 //     POST /api/jobs/:id/post/approve {start?}  admins: the desktop puts the page live and schedules the posts
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
@@ -46,6 +47,7 @@
 //     POST /api/desktop/jobs/:id/fail             {message}
 //     POST /api/desktop/jobs/:id/finish           {message, result} -> a page or publish job is done (no video)
 //     PUT  /api/desktop/jobs/:id/stills/:name     raw PNG: a social image from a page or publish job
+//     PUT  /api/desktop/jobs/:id/images           raw .zip: a store ad's social images (collage in 3 sizes + one per product)
 //     POST /api/desktop/jobs/:id/upload/start     -> starts an R2 multipart upload
 //     PUT  /api/desktop/jobs/:id/upload/part?n=1  raw bytes of one part (5 MB minimum except the last)
 //     POST /api/desktop/jobs/:id/upload/complete  {parts: [{partNumber, etag}]} -> job is done
@@ -226,6 +228,32 @@ async function cancelJob(env: Env, c: Caller, id: string) {
 }
 
 /** Streams the MP4. Supports Range requests so the browser's player can seek (Safari needs this). */
+// ---------- a store ad's social images: one zip per job ----------
+
+const imagesKey = (j: { brand: string; id: string }) => `images/${j.brand}/${j.id}.zip`;
+const MAX_IMAGES_ZIP = 60_000_000;
+
+async function putImages(req: Request, env: Env, j: JobRow) {
+  const len = Number(req.headers.get("content-length") ?? 0);
+  if (!req.body || !len) throw new HttpError(411, "Send the zip with its length");
+  if (len > MAX_IMAGES_ZIP) throw new HttpError(413, "The images zip is 60 MB at most");
+  // Under 60 MB, so it fits in a Worker's memory; R2 needs a known length anyway.
+  const bytes = await req.arrayBuffer();
+  const b = new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength));
+  if (bytes.byteLength > MAX_IMAGES_ZIP) throw new HttpError(413, "The images zip is 60 MB at most");
+  if (b[0] !== 0x50 || b[1] !== 0x4b || b[2] !== 0x03 || b[3] !== 0x04) throw new HttpError(400, "Send a zip");
+  await env.MEDIA.put(imagesKey(j), bytes, { httpMetadata: { contentType: "application/zip" }, customMetadata: { brand: j.brand, job: j.id } });
+  return json({ ok: true, bytes: bytes.byteLength });
+}
+
+async function images(env: Env, c: Caller, id: string) {
+  const j = await visibleJob(env, c.brand, id);
+  const obj = await env.MEDIA.get(imagesKey(j));
+  if (!obj) throw new HttpError(404, "No images for this one");
+  const name = String(JSON.parse(j.payload).campaign ?? "store").replace(/[^a-z0-9-]/gi, "");
+  return new Response(obj.body, { headers: { "content-type": "application/zip", "content-length": String(obj.size), "content-disposition": `attachment; filename="${name}-images.zip"`, "cache-control": "private, no-store" } });
+}
+
 async function video(req: Request, url: URL, env: Env, c: Caller, id: string) {
   const j = await visibleJob(env, c.brand, id);
   if (j.status !== "done" || !j.output_key) throw new HttpError(409, "The video isn't ready yet");
@@ -413,6 +441,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (m === "GET" && dl) return desktopDownload(env, dl[1]);
     const st = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
     if (m === "PUT" && st) return putStill(req, env, await activeJob(env, st[1]), st[2]);
+    const im = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/images$/);
+    if (m === "PUT" && im) return putImages(req, env, await activeJob(env, im[1]));
     const d = p.match(/^\/api\/desktop\/jobs\/([0-9a-f-]{36})\/(heartbeat|fail|finish|upload\/start|upload\/part|upload\/complete)$/);
     if (d) {
       const [, id, action] = d;
@@ -481,10 +511,15 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (pm && pm[2] === "approve" && m === "POST") return approvePost(req, env, c, pm[1]);
   const sm = p.match(/^\/api\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
   if (sm && m === "GET") return getStill(env, c, sm[1], sm[2]);
-  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video))?$/);
+  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video|images))?$/);
   if (s) {
     const [, id, action] = s;
-    if (!action && m === "GET") return json(publicJob(await visibleJob(env, c.brand, id)));
+    if (!action && m === "GET") {
+      const j = await visibleJob(env, c.brand, id);
+      const hasImages = j.status === "done" ? Boolean(await env.MEDIA.head(imagesKey(j))) : false;
+      return json({ ...publicJob(j), hasImages });
+    }
+    if (action === "images" && m === "GET") return images(env, c, id);
     if (action === "cancel" && m === "POST") return cancelJob(env, c, id);
     if (action === "video" && m === "GET") return video(req, url, env, c, id);
   }
