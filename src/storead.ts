@@ -21,6 +21,8 @@ export interface StoreAdSpec {
   title: string;
   note: string;
   caption: string;
+  /** When the sale ends, typed on the Store Ad page (ISO with the Eastern offset). Wins over a store's own countdown. */
+  endsAt?: string;
 }
 
 const clean = (v: unknown, max: number) => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -42,6 +44,25 @@ export function endsLine(iso: string) {
   return `Orders close ${day} at ${time}.`;
 }
 
+/**
+ * "2026-11-02" + "13:30" typed on the page, as an instant in Eastern time: "2026-11-02T13:30:00-05:00".
+ * Null when either is missing or not a real date and time.
+ */
+export function easternIso(date: unknown, time: unknown) {
+  const d = String(date ?? "").trim(), t = String(time ?? "").trim() || "23:59";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) return null;
+  for (const off of ["-04:00", "-05:00"]) {
+    const at = new Date(`${d}T${t}:00${off}`);
+    if (Number.isNaN(at.getTime())) return null;
+    const back = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at).replace(", ", "T");
+    if (back === `${d}T${t}`) return `${d}T${t}:00${off}`;
+  }
+  return null;
+}
+
+/** A store's own countdown only counts while it's still ahead: pop-up stores often keep an old one from a past sale. */
+const future = (iso: string | null | undefined) => (iso && Date.parse(iso) > Date.now() ? iso : null);
+
 /** A Chipply pop-up store: its name and close date when Chipply answers us, else just the link. */
 async function chipplyStore(env: Env, origin: string, slug: string) {
   const base = env.CHIPPLY_BASE_URL || origin;
@@ -61,6 +82,14 @@ async function chipplyStore(env: Env, origin: string, slug: string) {
 export async function validateStoreAd(env: Env, raw: any): Promise<StoreAdSpec> {
   const link = clean(raw?.storeUrl, 300);
   const note = clean(raw?.note, 80);
+  // A close date typed on the page wins over the store's own countdown.
+  let typedEnd: string | null = null;
+  if (raw?.endsDate || raw?.endsTime) {
+    typedEnd = easternIso(raw.endsDate, raw.endsTime);
+    if (!typedEnd) throw new HttpError(400, "Pick the date (and time) the sale ends");
+    if (Date.parse(typedEnd) <= Date.now()) throw new HttpError(400, "That close date has already passed");
+  }
+  const ends = typedEnd ? { endsAt: typedEnd } : {};
   const pop = link.match(CHIPPLY);
   if (pop) {
     if (!(await desktopCan(env, "storead-chipply"))) throw new HttpError(400, "Pop-up store ads need a desktop update first");
@@ -70,7 +99,7 @@ export async function validateStoreAd(env: Env, raw: any): Promise<StoreAdSpec> 
     const s = await chipplyStore(env, origin, slug);
     // Chipply sometimes turns the dashboard away; the desktop reads the store itself, so the job goes ahead.
     const name = s.name;
-    return { template: "storead", storeUri: slug.toLowerCase(), storeUrl: url, title: name ? `${name} store` : `Pop-up store: ${slug}`, note, caption: storeCaption(name, note, url, s.endsAt) };
+    return { template: "storead", storeUri: slug.toLowerCase(), storeUrl: url, title: name ? `${name} store` : `Pop-up store: ${slug}`, note, caption: storeCaption(name, note, url, typedEnd ?? future(s.endsAt)), ...ends };
   }
   const m = link.match(STORE);
   if (!m) throw new HttpError(400, "Paste the store's InkSoft or Chipply link, like stores.inksoft.com/yourstore or yourshop.chipply.com/yourstore");
@@ -86,5 +115,5 @@ export async function validateStoreAd(env: Env, raw: any): Promise<StoreAdSpec> 
   }
   if (!name) throw new HttpError(400, `InkSoft has no store at "${uri}". Check the link.`);
   const url = `https://stores.inksoft.com/${uri}`;
-  return { template: "storead", storeUri: uri, storeUrl: url, title: `${name} store`, note, caption: storeCaption(name, note, url) };
+  return { template: "storead", storeUri: uri, storeUrl: url, title: `${name} store`, note, caption: storeCaption(name, note, url, typedEnd), ...ends };
 }

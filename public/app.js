@@ -544,7 +544,12 @@ async function pageStore() {
   shell("store", `${header(brandName(state.brand), "Store Ad", "Paste an InkSoft store or a Chipply pop-up store link. The desktop builds a short video and social images from the store's products, colors and logo, ready for the store owner to post.")}
     <div class="card"><form id="sa"><div id="err"></div>
       <div class="field"><label for="saUrl">Store link</label><input type="text" id="saUrl" placeholder="stores.inksoft.com/yourstore or beegraphix.chipply.com/yourstore" required></div>
-      <div class="field"><label for="saNote">A note on screen <span class="muted">(optional)</span></label><input type="text" id="saNote" maxlength="80" placeholder="e.g. Orders close Friday, Nov 7"></div>
+      <div class="row" style="align-items:flex-end;gap:12px;margin-bottom:18px">
+        <div class="field" style="margin:0;max-width:200px"><label for="saEndsDate">Sale ends <span class="muted">(optional)</span></label><input type="date" id="saEndsDate"></div>
+        <div class="field" style="margin:0;max-width:160px"><label for="saEndsTime">At</label><input type="time" id="saEndsTime" step="300"></div>
+      </div>
+      <p class="small muted" style="margin:-8px 0 16px">Shows as "Sale ends" on the video and images, and in the caption (Eastern time). Leave it empty to use the store's own countdown, if it has one that hasn't passed.</p>
+      <div class="field"><label for="saNote">A note on screen <span class="muted">(optional)</span></label><input type="text" id="saNote" maxlength="80" placeholder="e.g. Delivered before the first playoff game"></div>
       <p class="small muted" style="margin:0 0 16px">InkSoft: it uses the store's Featured Products, in the order the owner set them. Chipply: it uses the store's products in their order (youth versions fold into the adult one), and shows when the sale ends if the store has a countdown.</p>
       <div class="row"><button class="btn" type="submit" id="saBuild">Build Store Ad</button><a class="btn outline" href="#/videos">Cancel</a></div>
     </form></div>`);
@@ -555,7 +560,7 @@ async function pageStore() {
     const btn = $("#saBuild");
     btn.disabled = true;
     try {
-      const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, spec: { template: "storead", storeUrl: $("#saUrl").value, note: $("#saNote").value } });
+      const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, spec: { template: "storead", storeUrl: $("#saUrl").value, note: $("#saNote").value, endsDate: $("#saEndsDate").value, endsTime: $("#saEndsTime").value } });
       location.hash = `#/videos/${j.id}`;
     } catch (ex) {
       $("#err").innerHTML = `<div class="error">${esc(ex.message)}</div>`;

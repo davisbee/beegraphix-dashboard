@@ -14,7 +14,7 @@
 //     GET  /api/voices                the ElevenLabs voices for faceless voiceovers (voiceover.ts)
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
-//     POST /api/jobs                  {kind: "build", spec: {template: "storead", storeUrl, note?}}  -> job (Store ad, storead.ts)
+//     POST /api/jobs                  {kind: "build", spec: {template: "storead", storeUrl, note?, endsDate?, endsTime?}}  -> job (Store ad, storead.ts)
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
 //     PUT  /api/uploads/:id/part?n=1  raw bytes of one piece      POST /api/uploads/:id/complete {parts}
 //     POST /api/lookup?brand=         {url} -> {name, style, photo} read from a product page
