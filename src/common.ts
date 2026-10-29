@@ -21,6 +21,7 @@ export interface Env {
   ELEVENLABS_API_KEY?: string; // ElevenLabs, for faceless voiceovers (voiceover.ts)
   ELEVENLABS_MODEL?: string; // optional; default eleven_multilingual_v2
   ELEVENLABS_BASE_URL?: string; // tests only: a stand-in for ElevenLabs
+  INKSOFT_BASE_URL?: string; // tests only: a stand-in for stores.inksoft.com
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

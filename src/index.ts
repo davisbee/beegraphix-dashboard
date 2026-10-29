@@ -14,6 +14,7 @@
 //     GET  /api/voices                the ElevenLabs voices for faceless voiceovers (voiceover.ts)
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
+//     POST /api/jobs                  {kind: "build", spec: {template: "storead", storeUrl, note?}}  -> job (Store ad, storead.ts)
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
 //     PUT  /api/uploads/:id/part?n=1  raw bytes of one piece      POST /api/uploads/:id/complete {parts}
 //     POST /api/lookup?brand=         {url} -> {name, style, photo} read from a product page
@@ -57,6 +58,7 @@ import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putSti
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopVoice, speakLines, voicesRoute } from "./voiceover";
+import { validateStoreAd } from "./storead";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
@@ -176,7 +178,12 @@ async function createJob(req: Request, env: Env, c: Caller) {
   const id = crypto.randomUUID();
   let kind = "render";
   let payload: Record<string, unknown>;
-  if (b.kind === "build") {
+  if (b.kind === "build" && (b.spec as any)?.template === "storead") {
+    // Store ad: just the InkSoft link and an optional note; the desktop reads the store itself (storead.ts).
+    const spec = await validateStoreAd(env, b.spec);
+    kind = "build";
+    payload = { campaign: campaignId(spec.title, id), variant: "store", draft: !!b.draft, title: spec.title, spec };
+  } else if (b.kind === "build") {
     const spec = await validateSpec(env, brand, b.spec);
     // AI avatar: HeyGen starts on every line now, so the clips are ready (or nearly) when the desktop claims it.
     if (spec.presenter.mode === "heygen" && spec.presenter.look) {
@@ -439,7 +446,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (vo) return vo;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
-  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover"), broll: await desktopCan(env, "broll") });
+  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover"), broll: await desktopCan(env, "broll"), storead: await desktopCan(env, "storead") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);
   if (p === "/api/users" && m === "POST") return createUser(req, env, c);
