@@ -1092,7 +1092,7 @@ async function pageNew(params = new URLSearchParams()) {
     btn.disabled = true;
     out.textContent = "Claude is writing… (about 20 seconds)";
     try {
-      const { draft, unread = [] } = await api("POST", `/api/draft?brand=${state.brand}`, {
+      const { draft, unread = [], missing = [] } = await api("POST", `/api/draft?brand=${state.brand}`, {
         template: f.id, goal: v.goal, audience: v.audience, topic: v.topic, notes: v.notes, presenter: v.presenter.name, winner: v.winner,
         products: prods.map((p) => ({ name: p.name, link: p.link, price: p.price })),
       });
@@ -1110,7 +1110,8 @@ async function pageNew(params = new URLSearchParams()) {
       save();
       fill();
       out.textContent = "Drafted. Read it out loud and change anything that doesn't sound like you."
-        + (unread.length ? ` Couldn't open the page for ${unread.join(", ")}, so that part is written from the name and your notes only.` : "");
+        + (unread.length ? ` Couldn't open the page for ${unread.join(", ")}, so that part is written from the name and your notes only.` : "")
+        + (missing.length ? ` Claude left ${missing.join(", ")} empty, so write ${missing.length === 1 ? "that part" : "those"} yourself.` : "");
     } catch (err) {
       out.innerHTML = `<span class="bad">${esc(err.message)}</span>`;
     }

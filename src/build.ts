@@ -246,7 +246,7 @@ const DraftSchema = z.object({
   products: z.array(z.object({
     shortName: z.string().describe("Name as it fits on screen, 4 words or fewer."),
     tag: z.string().describe("3 to 5 word reason to pick it, shown on screen."),
-  })).describe("One entry per product, in the order given"),
+  })).describe("One entry per item in the list above (each product, or the one program), in the order given. Never empty."),
   cta: z.string().describe("Payoff spoken to camera: where to go and what to do next. About 10 seconds out loud."),
 });
 
@@ -310,10 +310,20 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
     if (res.stop_reason === "refusal") throw new HttpError(422, "Claude wouldn't write that one. Try different wording.");
     const out = res.parsed_output;
     const byId = new Map((out?.beats ?? []).map((x) => [x.id, x]));
-    if (!out || f.beats.some((x) => !byId.get(x.id)?.script) || out.products.length < f.products.count) throw new HttpError(502, "The draft came back incomplete. Try again.");
+    const missing = f.beats.filter((x) => !byId.get(x.id)?.script?.trim()).map((x) => x.label);
+    if (!out || !out.hook?.trim() || missing.length === f.beats.length) {
+      console.error("draft incomplete", f.id, res.stop_reason, JSON.stringify(out ?? null).slice(0, 800));
+      throw new HttpError(502, "The draft came back incomplete. Try again.");
+    }
+    if (missing.length) console.error("draft partial", f.id, missing.join(", "));
     // Steps come back one per line; everything else is a single line.
-    const beats = f.beats.map((x) => ({ id: x.id, script: byId.get(x.id)!.script, text: x.text ? byId.get(x.id)!.text : "" }));
-    return json({ draft: { ...out, beats, products: out.products.slice(0, f.products.count) }, unread });
+    const beats = f.beats.map((x) => ({ id: x.id, script: byId.get(x.id)?.script ?? "", text: x.text ? byId.get(x.id)?.text ?? "" : "" }));
+    // Claude sometimes skips the on-screen name for a program (it isn't a "product"), so fall back to the name typed in.
+    const named = products.map((p, i) => ({
+      shortName: out.products[i]?.shortName?.trim() || p.name.split(/\s+/).slice(0, 4).join(" "),
+      tag: out.products[i]?.tag?.trim() ?? "",
+    }));
+    return json({ draft: { ...out, beats, products: named }, unread, missing });
   } catch (e) {
     if (e instanceof HttpError) throw e;
     if (e instanceof Anthropic.RateLimitError) throw new HttpError(429, "Claude is busy. Try again in a minute.");
