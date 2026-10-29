@@ -222,7 +222,8 @@ export async function saveDesktopFeatures(env: Env, features: unknown) {
   await env.MEDIA.put(DESKTOP, JSON.stringify({ features: list, at: now() }), { httpMetadata: { contentType: "application/json" } });
 }
 
-async function desktopCan(env: Env, feature: string) {
+/** Whether the desktop said it can do this (features it sends with its catalog). */
+export async function desktopCan(env: Env, feature: string) {
   const o = await env.MEDIA.get(DESKTOP);
   if (!o) return false;
   try { return ((await o.json<{ features?: string[] }>()).features ?? []).includes(feature); } catch { return false; }

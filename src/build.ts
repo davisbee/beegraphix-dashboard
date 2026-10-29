@@ -12,10 +12,12 @@ import type { Caller } from "./auth";
 import { readyUploads } from "./uploads";
 import { formatOf, type BeatKind, type FormatDef } from "./formats";
 import { pageText } from "./lookup";
-import { avatarAvailability } from "./heygen";
+import { avatarAvailability, desktopCan } from "./heygen";
 
 export const GOALS = ["reach", "target", "sell"] as const;
-export const LOOKS = ["creator", "full"] as const; // variant ids the desktop renders
+export const LOOKS = ["creator", "full", "showcase"] as const; // variant ids the desktop renders; showcase = faceless
+/** How scenes cut to each other (Content Factory src/components/Transitions.tsx). */
+export const TRANSITIONS = ["gold-wipe", "honeycomb", "whip", "flash", "cut"] as const;
 
 export interface BuildProduct {
   name: string;
@@ -44,8 +46,11 @@ export interface BuildSpec {
   goal: (typeof GOALS)[number];
   audience: string;
   look: (typeof LOOKS)[number];
-  /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts). */
-  presenter: { mode: "self" | "heygen"; name: string; title: string; look?: { id: string; name: string } };
+  /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts).
+   *  "none": faceless, rendered with the Showcase template (look "showcase"). */
+  presenter: { mode: "self" | "heygen" | "none"; name: string; title: string; look?: { id: string; name: string } };
+  /** how scenes cut to each other; omitted = the template's own default */
+  transition?: (typeof TRANSITIONS)[number];
   hook: string;
   hookText: string;
   cta: string;
@@ -82,17 +87,24 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   const title = str(r.title, 120);
   if (title.length < 4) throw new HttpError(400, "Give the video a title");
   if (!GOALS.includes(r.goal)) throw new HttpError(400, "Pick a goal: reach, target or sell");
-  if (!LOOKS.includes(r.look)) throw new HttpError(400, "Pick a look");
   const mode = r.presenter?.mode;
-  if (mode !== "self" && mode !== "heygen") throw new HttpError(400, "Pick who's on camera: record yourself or the AI avatar");
-  let look: { id: string; name: string } | undefined;
+  if (mode !== "self" && mode !== "heygen" && mode !== "none") throw new HttpError(400, "Pick who's on camera: record yourself, the AI avatar, or no one");
+  // Faceless videos always render with the Showcase template; videos with a presenter never do.
+  const look = mode === "none" ? "showcase" : r.look;
+  if (!LOOKS.includes(look) || (mode !== "none" && look === "showcase")) throw new HttpError(400, "Pick a look");
+  if (mode === "none" && !(await desktopCan(env, "showcase"))) throw new HttpError(400, "Faceless videos need a desktop update first");
+  if (r.transition !== undefined && r.transition !== "" && !TRANSITIONS.includes(r.transition)) throw new HttpError(400, "Pick a transition");
+  if (r.transition && !(await desktopCan(env, "showcase"))) throw new HttpError(400, "Transitions need a desktop update first");
+  let avatar: { id: string; name: string } | undefined;
   if (mode === "heygen") {
     const a = await avatarAvailability(env);
     if (!a.available) throw new HttpError(400, `The AI avatar isn't available: ${a.reason}`);
-    look = { id: a.look.id, name: a.look.name };
+    avatar = { id: a.look.id, name: a.look.name };
   }
-  const presenter = { mode, name: str(r.presenter?.name, 80), title: str(r.presenter?.title, 80), ...(look ? { look } : {}) };
-  if (!presenter.name) throw new HttpError(400, "Who's on camera? Add the presenter's name");
+  const presenter = mode === "none"
+    ? { mode, name: "", title: "" }
+    : { mode, name: str(r.presenter?.name, 80), title: str(r.presenter?.title, 80), ...(avatar ? { look: avatar } : {}) };
+  if (mode !== "none" && !presenter.name) throw new HttpError(400, "Who's on camera? Add the presenter's name");
   const hook = str(r.hook, 400);
   const cta = str(r.cta, 600);
   if (!hook) throw new HttpError(400, "Write the hook, or use Draft It For Me");
@@ -135,7 +147,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   }
 
   const footage: Record<string, string> = {};
-  for (const clip of mode === "heygen" ? [] : clipsOf(f)) {
+  for (const clip of mode === "self" ? clipsOf(f) : []) {
     const id = r.footage?.[clip];
     if (!id) continue;
     if (!UUID.test(String(id))) throw new HttpError(400, `Bad footage for ${clip}`);
@@ -147,7 +159,8 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
     ...products.flatMap((p, i) => (p.photo ? [{ id: p.photo, kind: "photo" as const, what: `Photo for ${f.products.labels[i]}` }] : [])),
   ]);
   return {
-    template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look: r.look, presenter,
+    template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look, presenter,
+    ...(r.transition ? { transition: r.transition } : {}),
     hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
     ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: mode === "self" && !!r.greenScreen,
   };

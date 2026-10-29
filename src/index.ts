@@ -10,6 +10,7 @@
 //     POST /api/password-help {email}   "Forgot your password?": emails a link (or, without email, shows on the Team page)
 //     POST /api/password-reset {token, next}   the page that link opens
 //     GET  /api/catalog               campaigns and variants on the desktop
+//     GET  /api/features              what the desktop can render: {showcase} (faceless videos, transitions)
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
@@ -52,7 +53,7 @@ import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
-import { desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
+import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
@@ -429,6 +430,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (hg) return hg;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
+  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);
   if (p === "/api/users" && m === "POST") return createUser(req, env, c);
