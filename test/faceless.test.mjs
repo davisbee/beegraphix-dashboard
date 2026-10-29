@@ -40,7 +40,7 @@ async function drain() {
 
 test("faceless and transitions wait for a desktop that can render them", async () => {
   await features(["heygen"]);
-  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false, voiceover: false });
+  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false, voiceover: false, broll: false });
   const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec() });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /desktop update/);
@@ -52,14 +52,14 @@ test("a faceless build renders the Showcase look, with no presenter and no foota
   await features(["heygen", "showcase"]);
   assert.equal((await call("GET", "/api/features", T.bgx)).data.showcase, true);
   await drain();
-  const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ transition: "honeycomb", footage: { hook: "00000000-0000-0000-0000-000000000000" } }) });
+  const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ transition: "honeycomb" }) });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
   assert.equal(job.payload.variant, "showcase");
   assert.equal(job.payload.spec.look, "showcase");
   assert.equal(job.payload.spec.transition, "honeycomb");
   assert.deepEqual(job.payload.spec.presenter, { mode: "none", name: "", title: "" });
-  assert.deepEqual(job.payload.spec.footage, {}, "footage is ignored without a presenter");
+  assert.deepEqual(job.payload.spec.footage, {}, "no presenter footage without a presenter");
   assert.equal(job.payload.spec.greenScreen, false);
   await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
 });
@@ -125,5 +125,23 @@ test("Logo to Gear needs the desktop and the customer's logo", async () => {
   assert.match((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({ logo: "not-an-id" }) })).data.error, /Bad logo/);
   const missing = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: s({ logo: "00000000-0000-0000-0000-000000000000" }) });
   assert.equal(missing.status, 400, "the logo has to be an upload of this brand's");
+  await features(["heygen"]);
+});
+
+test("faceless videos take shop footage behind a line once the desktop can play it", async () => {
+  await drain();
+  const up = "00000000-0000-0000-0000-000000000000";
+  await features(["heygen", "showcase"]);
+  assert.match((await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ footage: { hook: up } }) })).data.error, /Shop footage needs a desktop update/);
+  await features(["heygen", "showcase", "broll"]);
+  const bad = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ footage: { hook: up } }) });
+  assert.equal(bad.status, 400, "the clip must be this brand's finished upload");
+  const none = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec() });
+  assert.equal(none.status, 201, JSON.stringify(none.data));
+  const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(job.payload.spec.broll, undefined);
+  assert.deepEqual(job.payload.spec.footage, {});
+  await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
+  assert.equal((await call("GET", "/api/features", T.bgx)).data.broll, true);
   await features(["heygen"]);
 });

@@ -439,7 +439,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (vo) return vo;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
-  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover") });
+  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover"), broll: await desktopCan(env, "broll") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);
   if (p === "/api/users" && m === "POST") return createUser(req, env, c);
