@@ -40,7 +40,7 @@ async function drain() {
 
 test("faceless and transitions wait for a desktop that can render them", async () => {
   await features(["heygen"]);
-  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false });
+  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false, voiceover: false });
   const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec() });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /desktop update/);
@@ -62,6 +62,29 @@ test("a faceless build renders the Showcase look, with no presenter and no foota
   assert.deepEqual(job.payload.spec.footage, {}, "footage is ignored without a presenter");
   assert.equal(job.payload.spec.greenScreen, false);
   await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
+});
+
+test("voiceovers: faceless only, need the desktop and the ElevenLabs key", async () => {
+  assert.deepEqual((await call("GET", "/api/voices", T.bgx)).data, { ready: false, voices: [] });
+  assert.equal((await call("GET", "/api/voices")).status, 401);
+  await features(["heygen", "showcase"]);
+  assert.equal((await call("GET", "/api/features", T.bgx)).data.voiceover, false);
+  const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ voice: "AbCdEfGh12345678" }) });
+  assert.match(r.data.error, /Voiceovers need a desktop update/);
+  await features(["heygen", "showcase", "voiceover"]);
+  const k = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ voice: "AbCdEfGh12345678" }) });
+  assert.equal(k.status, 503);
+  assert.match(k.data.error, /ELEVENLABS_API_KEY/);
+  // A presenter video ignores a voice: the presenter already speaks.
+  await drain();
+  const p = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ presenter: { mode: "self", name: "Test" }, voice: "AbCdEfGh12345678" }) });
+  assert.equal(p.status, 201, JSON.stringify(p.data));
+  const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(job.payload.spec.voice, undefined);
+  await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
+  assert.equal((await call("GET", `/api/desktop/voice/${job.id}/hook`, T.bgx)).status, 401, "voice files are for the desktop");
+  assert.equal((await call("GET", `/api/desktop/voice/${job.id}/hook`, T.worker)).status, 404);
+  assert.equal((await call("GET", `/api/voices/preview?u=${encodeURIComponent("https://example.com/a.mp3")}`, T.bgx)).status, 400);
 });
 
 test("bad looks and transitions are refused", async () => {

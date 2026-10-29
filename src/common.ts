@@ -18,6 +18,9 @@ export interface Env {
   RESEND_BASE_URL?: string; // tests only: a stand-in for Resend
   HEYGEN_API_KEY?: string; // HeyGen, for the AI avatar (heygen.ts)
   HEYGEN_BASE_URL?: string; // tests only: a stand-in for HeyGen
+  ELEVENLABS_API_KEY?: string; // ElevenLabs, for faceless voiceovers (voiceover.ts)
+  ELEVENLABS_MODEL?: string; // optional; default eleven_multilingual_v2
+  ELEVENLABS_BASE_URL?: string; // tests only: a stand-in for ElevenLabs
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

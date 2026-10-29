@@ -13,6 +13,7 @@ import { readyUploads } from "./uploads";
 import { formatOf, type BeatKind, type FormatDef } from "./formats";
 import { pageText } from "./lookup";
 import { avatarAvailability, desktopCan } from "./heygen";
+import { checkVoice } from "./voiceover";
 
 export const GOALS = ["reach", "target", "sell"] as const;
 export const LOOKS = ["creator", "full", "showcase"] as const; // variant ids the desktop renders; showcase = faceless
@@ -49,6 +50,8 @@ export interface BuildSpec {
   /** "self": the person filmed clips (footage). "heygen": the AI avatar says each line (heygen.ts).
    *  "none": faceless, rendered with the Showcase template (look "showcase"). */
   presenter: { mode: "self" | "heygen" | "none"; name: string; title: string; look?: { id: string; name: string } };
+  /** faceless only: an ElevenLabs voice reads every line (voiceover.ts). clips: the lines saved, set on submit. */
+  voice?: { id: string; name: string; clips?: string[] };
   /** how scenes cut to each other; omitted = the template's own default */
   transition?: (typeof TRANSITIONS)[number];
   hook: string;
@@ -95,6 +98,13 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   if (mode === "none" && !(await desktopCan(env, "showcase"))) throw new HttpError(400, "Faceless videos need a desktop update first");
   if (r.transition !== undefined && r.transition !== "" && !TRANSITIONS.includes(r.transition)) throw new HttpError(400, "Pick a transition");
   if (r.transition && !(await desktopCan(env, "showcase"))) throw new HttpError(400, "Transitions need a desktop update first");
+  // A voiceover is for faceless videos only: a presenter or the AI avatar already speaks.
+  let voice: { id: string; name: string } | undefined;
+  if (mode === "none" && r.voice) {
+    if (!(await desktopCan(env, "voiceover"))) throw new HttpError(400, "Voiceovers need a desktop update first");
+    const v = await checkVoice(env, r.voice);
+    voice = { id: v.id, name: v.name };
+  }
   let avatar: { id: string; name: string } | undefined;
   if (mode === "heygen") {
     const a = await avatarAvailability(env);
@@ -161,6 +171,7 @@ export async function validateSpec(env: Env, brand: string, raw: any): Promise<B
   return {
     template: f.id, title, goal: r.goal, audience: str(r.audience, 200), look, presenter,
     ...(r.transition ? { transition: r.transition } : {}),
+    ...(voice ? { voice } : {}),
     hook, hookText: str(r.hookText, 60), cta, link: link(r.link, "The link"), products, beats,
     ...(winner !== undefined ? { winner } : {}), ctaEyebrow: f.ctaEyebrow, footage, greenScreen: mode === "self" && !!r.greenScreen,
   };

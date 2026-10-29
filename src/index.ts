@@ -10,7 +10,8 @@
 //     POST /api/password-help {email}   "Forgot your password?": emails a link (or, without email, shows on the Team page)
 //     POST /api/password-reset {token, next}   the page that link opens
 //     GET  /api/catalog               campaigns and variants on the desktop
-//     GET  /api/features              what the desktop can render: {showcase} (faceless videos, transitions)
+//     GET  /api/features              what the desktop can render: {showcase, voiceover}
+//     GET  /api/voices                the ElevenLabs voices for faceless voiceovers (voiceover.ts)
 //     POST /api/jobs                  {campaign, variant, draft?, brand?}  -> job (render a campaign on the desktop)
 //     POST /api/jobs                  {kind: "build", spec, draft?, brand?}  -> job (New video: build a campaign, then render it)
 //     POST /api/uploads?brand=        {kind: footage|photo, name, type, size} -> {upload, partBytes}
@@ -38,6 +39,7 @@
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
 //     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}], features?: ["heygen"]}
 //     GET  /api/desktop/heygen/:videoId           an AI avatar clip: {status, url, message} (heygen.ts)
+//     GET  /api/desktop/voice/:jobId/:clip        one line of a faceless video's voiceover, MP3 (voiceover.ts)
 //     GET  /api/desktop/uploads/:id               a file staff uploaded for a build job
 //     POST /api/desktop/jobs/:id/heartbeat        {status: "rendering" | "uploading", progress?, message?}
 //     POST /api/desktop/jobs/:id/fail             {message}
@@ -54,6 +56,7 @@ import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./d
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
+import { desktopVoice, speakLines, voicesRoute } from "./voiceover";
 import { desktopDownload, finishUpload, startUpload, uploadPiece, viewPhoto } from "./uploads";
 import {
   callerFor, changePassword, createUser, listUsers, login, logout, publicUser, requestPasswordHelp, resetPassword, resetWithLink, resetRequests, sameString, sessionUser, updateUser, type Caller,
@@ -179,6 +182,8 @@ async function createJob(req: Request, env: Env, c: Caller) {
     if (spec.presenter.mode === "heygen" && spec.presenter.look) {
       spec.heygen = await startClips(env, { ...spec.presenter.look, preview: null, type: null }, avatarLines(spec), spec.title);
     }
+    // Faceless voiceover: ElevenLabs speaks every line now; the desktop downloads them (voiceover.ts).
+    if (spec.voice) spec.voice.clips = await speakLines(env, id, spec.voice.id, avatarLines(spec));
     kind = "build";
     payload = { campaign: campaignId(spec.title, id), variant: spec.look, draft: !!b.draft, title: spec.title, spec };
   } else {
@@ -393,6 +398,8 @@ async function route(req: Request, env: Env): Promise<Response> {
     requireDesktop(req, env);
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
+    const dv = p.match(/^\/api\/desktop\/voice\/([0-9a-f-]{36})\/([a-z0-9-]{1,40})$/);
+    if (m === "GET" && dv) return desktopVoice(env, dv[1], dv[2]);
     const hv = p.match(/^\/api\/desktop\/heygen\/([^/]+)$/);
     if (m === "GET" && hv) return desktopClipStatus(env, decodeURIComponent(hv[1]));
     const dl = p.match(/^\/api\/desktop\/uploads\/([0-9a-f-]{36})$/);
@@ -428,9 +435,11 @@ async function route(req: Request, env: Env): Promise<Response> {
   const c = await caller(req, env);
   const hg = await heygenRoute(req, url, env, c, p);
   if (hg) return hg;
+  const vo = await voicesRoute(req, url, env, p);
+  if (vo) return vo;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
-  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase") });
+  if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);
   if (p === "/api/users" && m === "POST") return createUser(req, env, c);
