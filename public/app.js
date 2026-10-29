@@ -230,7 +230,7 @@ function showReset(token) {
 // ---------- videos ----------
 
 async function pageVideos() {
-  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn" href="#/new?fresh">New Video</a></div>`)}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
+  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first.", `<div class="row"><a class="btn outline" href="#/render">Render Again</a><a class="btn outline" href="#/store">Store Ad</a><a class="btn" href="#/new?fresh">New Video</a></div>`)}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
   // Drafts: videos someone saved to finish later (usually waiting on footage).
   const showDrafts = async () => {
     const { drafts } = await api("GET", `/api/drafts?brand=${state.brand}`);
@@ -438,9 +438,11 @@ async function pageVideo(id) {
     const player = j.hasVideo
       ? (playing ? null : `<video controls playsinline preload="metadata" src="/api/jobs/${j.id}/video"></video>`)
       : `<div class="wait">${j.status === "failed" ? "This one didn't finish." : j.status === "cancelled" ? "Cancelled." : `${esc(label)}${j.progress != null && j.status === "rendering" ? ` ${Math.round(j.progress * 100)}%` : ""}…<br><span class="small">${esc(j.message ?? "")}</span>`}</div>`;
+    const storeAd = j.payload.spec?.template === "storead";
     const actions = [
       j.hasVideo ? `<a class="btn" href="/api/jobs/${j.id}/video?download">Download</a>` : "",
-      j.payload.spec ? `<button class="btn outline" type="button" id="copyScript">Copy Script</button>` : "",
+      j.payload.spec && !storeAd ? `<button class="btn outline" type="button" id="copyScript">Copy Script</button>` : "",
+      storeAd && j.payload.spec.caption ? `<button class="btn outline" type="button" id="copyCaption">Copy Caption</button>` : "",
       j.status === "queued" ? `<button class="btn outline" id="cancel">Cancel</button>` : "",
       ["done", "failed", "cancelled"].includes(j.status) ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
     ].join("");
@@ -464,7 +466,9 @@ async function pageVideo(id) {
             </dl>
             <div class="row" style="margin-top:20px">${actions}</div>
           </div>
-          ${j.status === "done" ? `<div id="posting"></div>` : ""}
+          ${storeAd ? `<div class="card"><h2>For the store owner</h2><p class="muted small" style="margin:0 0 12px">Download the video and send it with this caption. They post it themselves.</p>
+            <p style="margin:0">${esc(j.payload.spec.caption ?? "")}</p><p class="small muted" style="margin:12px 0 0"><a href="${esc(j.payload.spec.storeUrl)}" target="_blank" rel="noopener">Open the store</a></p></div>` : ""}
+          ${j.status === "done" && !storeAd ? `<div id="posting"></div>` : ""}
         </div>
       </div>`;
     if (player === null) {
@@ -476,12 +480,40 @@ async function pageVideo(id) {
     const cancel = $("#cancel");
     const cs = $("#copyScript");
     if (cs) cs.onclick = () => copyScript(cs, scriptOfSpec(j.payload.spec));
+    const cc = $("#copyCaption");
+    if (cc) cc.onclick = () => copyScript(cc, j.payload.spec.caption);
     if (cancel) cancel.onclick = async () => { cancel.disabled = true; await api("POST", `/api/jobs/${j.id}/cancel`).catch((e) => alert(e.message)); refresh(); };
     if ($("#posting")) showPosting(j).catch((e) => { const b = $("#posting"); if (b) b.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="bad">${esc(e.message)}</p></div>`; });
     stopTimer();
     if (ACTIVE.includes(j.status)) state.timer = setTimeout(() => refresh().catch(() => {}), 4000);
   };
   try { await refresh(); } catch (e) { $("#detail").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+}
+
+// ---------- Store ad: an InkSoft store link in, a video for the store owner out ----------
+
+async function pageStore() {
+  shell("videos", `${header(brandName(state.brand), "Store Ad", "Paste a store's InkSoft link. The desktop builds a 20 second video from the store's featured products, colors and logo, ready for the store owner to post.")}
+    <div class="card"><form id="sa"><div id="err"></div>
+      <div class="field"><label for="saUrl">Store link</label><input type="text" id="saUrl" placeholder="https://stores.inksoft.com/yourstore" required></div>
+      <div class="field"><label for="saNote">A note on screen <span class="muted">(optional)</span></label><input type="text" id="saNote" maxlength="80" placeholder="e.g. Orders close Friday, Nov 7"></div>
+      <p class="small muted" style="margin:0 0 16px">It uses the store's Featured Products, in the order the owner set them. Change those in InkSoft to change the video.</p>
+      <div class="row"><button class="btn" type="submit" id="saBuild">Build Store Ad</button><a class="btn outline" href="#/videos">Cancel</a></div>
+    </form></div>`);
+  const feats = await api("GET", "/api/features").catch(() => ({}));
+  if (!feats.storead) $("#err").innerHTML = `<div class="notice">Store ads need a desktop update. Run <code>git pull</code> on the AI desktop and restart the worker.</div>`;
+  $("#sa").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $("#saBuild");
+    btn.disabled = true;
+    try {
+      const j = await api("POST", "/api/jobs", { kind: "build", brand: state.brand, spec: { template: "storead", storeUrl: $("#saUrl").value, note: $("#saNote").value } });
+      location.hash = `#/videos/${j.id}`;
+    } catch (ex) {
+      $("#err").innerHTML = `<div class="error">${esc(ex.message)}</div>`;
+      btn.disabled = false;
+    }
+  };
 }
 
 // ---------- render a video ----------
@@ -1305,6 +1337,7 @@ function route() {
   if (parts[0] === "new") return pageNew(params).catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "avatar") return pageAvatar().catch(fail);
+  if (parts[0] === "store") return pageStore().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
   return pageVideos().catch(fail);
 }

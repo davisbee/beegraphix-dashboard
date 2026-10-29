@@ -40,7 +40,7 @@ async function drain() {
 
 test("faceless and transitions wait for a desktop that can render them", async () => {
   await features(["heygen"]);
-  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false, voiceover: false, broll: false });
+  assert.deepEqual((await call("GET", "/api/features", T.bgx)).data, { showcase: false, voiceover: false, broll: false, storead: false });
   const r = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec() });
   assert.equal(r.status, 400);
   assert.match(r.data.error, /desktop update/);
@@ -143,5 +143,25 @@ test("faceless videos take shop footage behind a line once the desktop can play 
   assert.deepEqual(job.payload.spec.footage, {});
   await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
   assert.equal((await call("GET", "/api/features", T.bgx)).data.broll, true);
+  await features(["heygen"]);
+});
+
+test("store ads: an InkSoft link in, a store job with its caption out", async () => {
+  const sa = (over) => ({ kind: "build", spec: { template: "storead", storeUrl: "https://stores.inksoft.com/171arw/shop/home", ...over } });
+  assert.match((await call("POST", "/api/jobs", T.bgx, sa({ storeUrl: "https://example.com/shop" }))).data.error, /InkSoft link/);
+  await features(["heygen"]);
+  assert.match((await call("POST", "/api/jobs", T.bgx, sa({}))).data.error, /desktop update/);
+  await features(["heygen", "storead"]);
+  await drain();
+  const r = await call("POST", "/api/jobs", T.bgx, sa({ note: "Orders close Friday" }));
+  if (r.status === 400 && /no store/.test(r.data.error)) return; // InkSoft unreachable from this machine
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const job = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  assert.equal(job.payload.variant, "store");
+  assert.equal(job.payload.spec.storeUri, "171arw");
+  assert.equal(job.payload.spec.caption, "The 171st Air Refueling Wing store is open. Orders close Friday. Shop it here: https://stores.inksoft.com/171arw");
+  assert.doesNotMatch(job.payload.spec.caption, /—/, "no em dashes");
+  await call("POST", `/api/desktop/jobs/${job.id}/fail`, T.worker, { message: "test" });
+  assert.equal((await call("GET", "/api/features", T.bgx)).data.storead, true);
   await features(["heygen"]);
 });
