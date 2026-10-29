@@ -535,7 +535,7 @@ function blankVideo() {
   return {
     template: "top5", goal: "reach", audience: "", look: "creator", title: "", topic: "", notes: "", beats: {}, winner: 0,
     presenter: { mode: "self", name: state.me.name, title: "" },
-    hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false,
+    hook: "", hookText: "", cta: "", link: "", greenScreen: true, draft: false, transition: "",
     products: [0, 1, 2, 3, 4].map(() => ({ name: "", link: "", style: "", shortName: "", tag: "", script: "", photo: null, photoName: "" })),
     footage: {}, footageNames: {},
   };
@@ -630,6 +630,10 @@ async function pageNew(params = new URLSearchParams()) {
   // The AI avatar: on only when HeyGen is connected, an admin picked the look, and the desktop is up to date.
   const av = await api("GET", "/api/heygen/available").catch(() => ({ available: false, reason: "Couldn't check" }));
   if (v.presenter.mode === "heygen" && !av.available) v.presenter.mode = "self";
+  // Faceless videos and transition choices need the desktop that knows the Showcase template.
+  const feats = await api("GET", "/api/features").catch(() => ({ showcase: false }));
+  if (v.presenter.mode === "none" && !feats.showcase) v.presenter.mode = "self";
+  if (!feats.showcase) v.transition = "";
 
   const choice = (name, value, title, sub, disabled) =>
     `<label class="choice${disabled ? " off" : ""}"><input type="radio" name="${name}" value="${value}" ${disabled ? "disabled" : ""}><span><b>${esc(title)}</b><span class="small muted">${esc(sub)}</span></span></label>`;
@@ -650,10 +654,16 @@ async function pageNew(params = new URLSearchParams()) {
 
     <div class="card"><div class="step">2</div><h2>Format and look</h2>
       <div class="choices three" style="margin-top:12px">${state.formats.map((x) => choice("template", x.id, x.name, x.blurb)).join("")}</div>
-      <div class="choices two" style="margin-top:10px">
+      <div class="choices two" style="margin-top:10px" id="lookBox">
         ${choice("look", "creator", "Creator-style cut", "Feels like a person talking, with a music bed. Best for Reels and TikTok.")}
         ${choice("look", "full", "Polished brand reel", "Full brand graphics on every product.")}
       </div>
+      <p class="small muted" id="lookFaceless" hidden style="margin:10px 0 0">No presenter: this video uses the <b>Showcase</b> look. Products spin in over the brand studio with bold text and music.</p>
+      <div class="field" style="margin:16px 0 0;max-width:340px"><label for="transition">Transitions between scenes</label>
+        <select id="transition" data-k="transition" ${feats.showcase ? "" : "disabled"}>
+          <option value="">The look's own (gold wipe, or honeycomb for Showcase)</option>
+          <option value="gold-wipe">Gold wipe</option><option value="honeycomb">Honeycomb</option><option value="whip">Whip</option><option value="flash">Flash</option><option value="cut">Hard cut</option>
+        </select>${feats.showcase ? "" : `<span class="small muted">Needs a desktop update.</span>`}</div>
     </div>
 
     <div class="card"><div class="step">3</div><h2>${esc(f.products.title)}</h2><p class="muted small" style="margin:0 0 16px">${esc(f.products.hint)}</p>
@@ -694,11 +704,12 @@ async function pageNew(params = new URLSearchParams()) {
     </div>
 
     <div class="card"><div class="step">5</div><h2>Presenter</h2>
-      <div class="choices two" style="margin-top:12px">
+      <div class="choices three" style="margin-top:12px">
         ${choice("presenter", "self", "Record yourself", "Film each line on your phone and upload it below.")}
+        ${choice("presenter", "none", "No presenter (faceless)", feats.showcase ? "Products, bold text and music. Nothing to film." : "Not available yet: needs a desktop update.", !feats.showcase)}
         ${choice("presenter", "heygen", "AI avatar (HeyGen)", av.available ? `${av.look.name} says each line. Uses HeyGen credits, and the video is labeled AI.` : `Not available yet: ${av.reason}.`, !av.available)}
       </div>
-      <div class="grid2" style="margin-top:18px">
+      <div class="grid2" style="margin-top:18px" id="nameBox">
         <div class="field"><label for="prName">Name on screen</label><input type="text" id="prName" data-k="presenter.name"></div>
         <div class="field"><label for="prTitle">Title on screen <span class="muted">(optional)</span></label><input type="text" id="prTitle" data-k="presenter.title" placeholder="e.g. Vice President, BeeGraphix"></div>
       </div>
@@ -745,7 +756,7 @@ async function pageNew(params = new URLSearchParams()) {
     (form.querySelector(`input[name=look][value="${v.look}"]`) ?? form.querySelector("input[name=look]")).checked = true;
     form.querySelector(`input[name=template][value="${f.id}"]`).checked = true;
     if (f.winner) form.querySelector(`input[name=winner][value="${v.winner === 1 ? 1 : 0}"]`).checked = true;
-    form.querySelector(`input[name=presenter][value=${v.presenter.mode === "heygen" ? "heygen" : "self"}]`).checked = true;
+    form.querySelector(`input[name=presenter][value=${["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self"}]`).checked = true;
     names();
     showPresenter();
   };
@@ -757,9 +768,12 @@ async function pageNew(params = new URLSearchParams()) {
     return { secs, usd: (secs / 60) * (av.usdPerMinute || 0) };
   };
   const showPresenter = () => {
-    const ai = v.presenter.mode === "heygen";
+    const ai = v.presenter.mode === "heygen", none = v.presenter.mode === "none";
     $("#avatarBox").hidden = !ai;
-    $("#footageBox").hidden = ai;
+    $("#footageBox").hidden = ai || none;
+    $("#nameBox").hidden = none;
+    $("#lookBox").hidden = none;
+    $("#lookFaceless").hidden = !none;
     if (!ai) return;
     const e = avatarEstimate();
     $("#avatarCost").innerHTML = e.secs > 3 ? `About <b>${e.secs} seconds</b> of avatar, roughly <b>$${e.usd.toFixed(2)}</b> in HeyGen credits.` : "Write the script to see the HeyGen cost.";
@@ -1011,8 +1025,9 @@ async function pageNew(params = new URLSearchParams()) {
     btn.disabled = true;
     try {
       const spec = {
-        template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.look, winner: v.winner,
-        presenter: { mode: v.presenter.mode === "heygen" ? "heygen" : "self", name: v.presenter.name, title: v.presenter.title },
+        template: f.id, title: v.title, goal: v.goal, audience: v.audience, look: v.presenter.mode === "none" ? "showcase" : v.look, winner: v.winner,
+        presenter: { mode: ["heygen", "none"].includes(v.presenter.mode) ? v.presenter.mode : "self", name: v.presenter.name, title: v.presenter.title },
+        ...(v.transition ? { transition: v.transition } : {}),
         hook: v.hook, hookText: v.hookText, cta: v.cta, link: v.link, greenScreen: v.greenScreen,
         products: prods.map(({ photoName, auto, colors, color, ...p }) => p),
         beats: Object.fromEntries(f.beats.map((b) => [b.id, v.beats[b.id]])),
