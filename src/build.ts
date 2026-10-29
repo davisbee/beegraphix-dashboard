@@ -204,7 +204,7 @@ export const DRAFTS_PER_HOUR = 30;
 export const MODEL = "claude-opus-5-5";
 
 export const BRAND_NOTES: Record<string, string> = {
-  beegraphix: "BeeGraphix decorates custom apparel (in-house DTF printing and embroidery) in Fredericktown, PA. Viewers are business owners and managers buying gear for their crew. Every video ends by sending people to pick favorites and get custom pricing with their logo.",
+  beegraphix: "BeeGraphix decorates custom apparel (in-house DTF printing and embroidery). Viewers are business owners and managers buying gear for their crew. Every video ends by sending people to pick favorites and get custom pricing with their logo.",
   rugbee: "Rugbee is a division of BeeGraphix (rugbee.co). Keep claims to what the person tells you about the products.",
 };
 const GOAL_NOTES: Record<string, string> = {
