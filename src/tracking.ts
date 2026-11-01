@@ -93,10 +93,11 @@ export async function saveFeatures(env: Env, j: PublishedJob, result: { posted?:
 
 /** POST /api/desktop/stats: the desktop holds the platform keys, so it sends the numbers here. */
 export async function putStats(req: Request, env: Env) {
-  const b = await body<{ posts?: unknown; baselines?: unknown }>(req);
+  const b = await body<{ posts?: unknown; baselines?: unknown; accounts?: unknown }>(req);
   const posts = Array.isArray(b.posts) ? b.posts : [];
   const baselines = Array.isArray(b.baselines) ? b.baselines : [];
-  if (posts.length + baselines.length > 500) throw new HttpError(400, "Send 500 rows at most at a time");
+  const accounts = Array.isArray(b.accounts) ? b.accounts : [];
+  if (posts.length + baselines.length + accounts.length > 500) throw new HttpError(400, "Send 500 rows at most at a time");
   const t = now();
   const need = (v: unknown, what: string, max = 100) => { const s = text(v, max); if (!s) throw new HttpError(400, `A row is missing ${what}`); return s; };
   const platformOf = (v: unknown) => { const s = need(v, "platform", 20); if (!PLATFORMS.includes(s)) throw new HttpError(400, `Unknown platform "${s}"`); return s; };
@@ -105,21 +106,29 @@ export async function putStats(req: Request, env: Env) {
       const reading = need(x?.reading, "reading", 10);
       if (!["48h", "7d", "backfill"].includes(reading)) throw new HttpError(400, `Unknown reading "${reading}"`);
       return env.DB.prepare(
-        `INSERT OR REPLACE INTO post_stats (source, post_id, reading, brand, platform, job_id, posted_at, read_at, views, watch_seconds, shares, comments, saves, link_clicks, new_followers, leads, orders, boosted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO post_stats (source, post_id, reading, brand, platform, job_id, item_key, posted_at, read_at, views, watch_seconds, shares, comments, saves, link_clicks, new_followers, leads, orders, boosted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
-        need(x.source, "source", 40), need(x.postId, "postId"), reading, need(x.brand, "brand", 40), platformOf(x.platform), text(x.jobId, 36), text(x.postedAt, 40), t,
+        need(x.source, "source", 40), need(x.postId, "postId"), reading, need(x.brand, "brand", 40), platformOf(x.platform), text(x.jobId, 36), text(x.itemKey, 60), text(x.postedAt, 40), t,
         whole(x.views), count(x.watchSeconds), whole(x.shares), whole(x.comments), whole(x.saves), whole(x.linkClicks), whole(x.newFollowers), whole(x.leads), whole(x.orders), x.boosted === true ? 1 : 0,
       );
     }),
     ...baselines.map((x: Record<string, unknown>) => {
       const asOf = need(x?.asOf, "asOf", 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new HttpError(400, "asOf is a date, YYYY-MM-DD");
-      // INSERT OR IGNORE: the starting point stays what it was the first time, however many times this runs.
-      return env.DB.prepare("INSERT OR IGNORE INTO platform_baseline (brand, platform, as_of, followers, avg_views, posts_counted, source, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      // The starting point stays what it was the first time, however many times this runs; only blanks get filled.
+      return env.DB.prepare(
+        `INSERT INTO platform_baseline (brand, platform, as_of, followers, avg_views, posts_counted, source, taken_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (brand, platform, as_of) DO UPDATE SET followers = COALESCE(followers, excluded.followers), avg_views = COALESCE(avg_views, excluded.avg_views), posts_counted = COALESCE(posts_counted, excluded.posts_counted)`,
+      )
         .bind(need(x.brand, "brand", 40), platformOf(x.platform), asOf, whole(x.followers), count(x.avgViews), whole(x.postsCounted), need(x.source, "source", 40), t);
+    }),
+    ...accounts.map((x: Record<string, unknown>) => {
+      const asOf = need(x?.asOf, "asOf", 10);
+      return env.DB.prepare("INSERT OR REPLACE INTO account_stats (brand, as_of, source, raw, taken_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(need(x.brand, "brand", 40), asOf, need(x.source, "source", 40), JSON.stringify(x.raw ?? null).slice(0, 200000), t);
     }),
   ];
   if (rows.length) await env.DB.batch(rows);
-  return json({ ok: true, posts: posts.length, baselines: baselines.length });
+  return json({ ok: true, posts: posts.length, baselines: baselines.length, accounts: accounts.length });
 }

@@ -352,3 +352,66 @@ test("the desktop sends stats and the starting snapshot", async () => {
   assert.deepEqual([ok.data.posts, ok.data.baselines], [1, 1]);
   assert.equal((await call("POST", "/api/desktop/stats", T.worker, { baselines: [{ brand: "beegraphix", platform: "facebook", asOf: "2099-01-01", followers: 999, source: "meta" }] })).status, 200, "sending it again is safe");
 });
+
+test("the Performance tab scores reels by goal, and paid posts stay out", async () => {
+  // A finished video, posted, with its reel 8 days old.
+  const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Scored ${Date.now()}`, goal: "reach", hookText: "A hook worth scoring" }) });
+  const id = made.data.id;
+  await call("POST", "/api/desktop/claim", T.worker);
+  await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
+  const part = await call("PUT", `/api/desktop/jobs/${id}/upload/part?n=1`, T.worker, null, Buffer.from("fake mp4"));
+  await call("POST", `/api/desktop/jobs/${id}/upload/complete`, T.worker, { parts: [part.data] });
+  const slug = `scored-${Date.now().toString(36)}`;
+  const copy = { page: { title: "T | BeeGraphix", headline: "H", description: "d" }, captions: { facebook: "Hi {url}" } };
+  await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug, copy });
+  assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06", startTime: "14:25" })).status, 202);
+  const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  const old = new Date(Date.now() - 8 * 86400_000).toISOString();
+  const key = `reel${Date.now().toString(36)}`;
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:facebook`, platform: "facebook", status: "scheduled", scheduleDate: old, id: "g1", type: "reel", day: 0 }] } });
+
+  const due = (await call("GET", "/api/desktop/stats/due", T.worker)).data.due.find((x) => x.jobId === id);
+  assert.equal(due.reading, "7d");
+  assert.equal(due.itemKey, key);
+  assert.equal((await call("GET", "/api/desktop/stats/due", T.bgx)).status, 401, "desktop only");
+
+  const sent = await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "meta", postId: `v-${key}`, reading: "7d", brand: "beegraphix", platform: "facebook", jobId: id, itemKey: key, views: 500, watchSeconds: 7200, shares: 9, newFollowers: 2 }] });
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  assert.ok(!(await call("GET", "/api/desktop/stats/due", T.worker)).data.due.some((x) => x.jobId === id), "not due once it's read");
+
+  // The landing page's count: known links only, and no sign-in.
+  const hit = (b) => fetch(`${BASE}/api/t`, { method: "POST", body: JSON.stringify(b) });
+  assert.equal((await hit({ id, source: "facebook", content: key, event: "click" })).status, 204);
+  assert.equal((await hit({ id, source: "facebook", content: "made-up", event: "click" })).status, 204);
+  assert.equal((await fetch(`${BASE}/api/t`, { method: "POST", body: "not json" })).status, 204);
+
+  const perf = await call("GET", "/api/performance?brand=beegraphix", T.bgx);
+  assert.equal(perf.status, 200, JSON.stringify(perf.data));
+  const mine = perf.data.posts.find((p) => p.job === id);
+  assert.equal(mine.reading, "7d");
+  assert.equal(mine.numbers.watchSeconds, 7200);
+  assert.equal(mine.numbers.linkClicks, 1);
+  assert.equal(typeof mine.score, "number");
+  assert.ok(perf.data.goals.reach.ranks.hook.some((r) => r.key === "A hook worth scoring"));
+  assert.equal(perf.data.goals.reach.ranks.hook.find((r) => r.key === "A hook worth scoring").tooFew, true);
+  assert.equal((await call("GET", "/api/performance?brand=beegraphix", T.rugbee)).status, 404, "other brand");
+  assert.equal((await call("GET", "/api/performance?brand=beegraphix", null)).status, 401);
+
+  const mark = { job: id, platform: "facebook", itemKey: key, boosted: true };
+  assert.equal((await call("POST", "/api/performance/boosted", T.bgx, mark)).status, 403, "admins only");
+  assert.equal((await call("POST", "/api/performance/boosted", T.admin, mark)).status, 200);
+  const paid = (await call("GET", "/api/performance?brand=beegraphix", T.bgx)).data;
+  assert.equal(paid.posts.find((p) => p.job === id).score, null);
+  assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === "A hook worth scoring"), "paid posts leave the rankings");
+});
+
+test("a snapshot keeps its first numbers and only fills blanks", async () => {
+  const asOf = "2098-02-03";
+  const row = { brand: "beegraphix", platform: "tiktok", asOf, source: "manual", followers: 10 };
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { baselines: [row] })).status, 200);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { baselines: [{ ...row, followers: 99, avgViews: 40 }] })).status, 200);
+  const b = (await call("GET", "/api/performance?brand=beegraphix", T.bgx)).data.baseline.find((x) => x.as_of === asOf);
+  assert.equal(b.followers, 10);
+  assert.equal(b.avg_views, 40);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { accounts: [{ brand: "beegraphix", asOf, source: "highlevel", raw: { any: "shape" } }] })).status, 200);
+});
