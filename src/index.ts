@@ -40,6 +40,7 @@
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
 //     POST /api/desktop/stats                     {posts?, baselines?}: platform numbers and the starting snapshot (tracking.ts)
+//     GET  /api/desktop/stats/due                 -> {due: [...]}: reels whose 48 hour or 7 day read is waiting (performance.ts)
 //     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}], features?: ["heygen"]}
 //     GET  /api/desktop/heygen/:videoId           an AI avatar clip: {status, url, message} (heygen.ts)
 //     GET  /api/desktop/voice/:jobId/:clip        one line of a faceless video's voiceover, MP3 (voiceover.ts)
@@ -59,6 +60,7 @@ import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { putStats } from "./tracking";
+import { getPerformance, linkEvent, markBoosted, statsDue } from "./performance";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopVoice, speakLines, voicesRoute } from "./voiceover";
@@ -436,6 +438,7 @@ async function route(req: Request, env: Env): Promise<Response> {
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
     if (m === "POST" && p === "/api/desktop/stats") return putStats(req, env);
+    if (m === "GET" && p === "/api/desktop/stats/due") return statsDue(env);
     const dv = p.match(/^\/api\/desktop\/voice\/([0-9a-f-]{36})\/([a-z0-9-]{1,40})$/);
     if (m === "GET" && dv) return desktopVoice(env, dv[1], dv[2]);
     const hv = p.match(/^\/api\/desktop\/heygen\/([^/]+)$/);
@@ -459,6 +462,9 @@ async function route(req: Request, env: Env): Promise<Response> {
     throw new HttpError(404, "Not found");
   }
 
+  // The landing pages report visits and quote requests; they have no login to send.
+  if (p === "/api/t" && m === "POST") return linkEvent(req, env);
+
   // Signing in, and a person's own account (allowed while they still have a temporary password).
   if (p === "/api/login" && m === "POST") return login(req, env);
   if (p === "/api/logout" && m === "POST") return logout(req, env);
@@ -479,6 +485,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (vo) return vo;
 
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
+  if (p === "/api/performance" && m === "GET") return getPerformance(env, c, url);
+  if (p === "/api/performance/boosted" && m === "POST") return markBoosted(req, env, c);
   if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover"), broll: await desktopCan(env, "broll"), storead: await desktopCan(env, "storead") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);

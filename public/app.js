@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/new, #/store, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/performance, #/new, #/store, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -95,7 +95,7 @@ function shell(page, inner) {
   // the signed-in person. Creating lives in one place so New video, Store ad and Render again aren't
   // repeated in the nav and again on the Videos page.
   const admin = state.me.role === "admin";
-  const nav = [["videos", "Videos"], ...(admin ? [["team", "Team"], ["avatar", "AI Avatar"]] : [])];
+  const nav = [["videos", "Videos"], ["performance", "Performance"], ...(admin ? [["team", "Team"], ["avatar", "AI Avatar"]] : [])];
   const create = [
     ["new", "New video", "Pick a goal and a format, write the script", "?fresh"],
     ["store", "Store ad", "Paste an InkSoft store link, get a video for the owner", ""],
@@ -1406,6 +1406,42 @@ function pageAccount(forced) {
 
 // ---------- routing ----------
 
+// ---------- Performance ----------
+
+const GOAL_NAMES = { reach: "Reach", target: "Target", sell: "Sell" };
+const METRIC_NAMES = { watchSeconds: "Watch time", shares: "Shares", newFollowers: "New followers", comments: "Comments", saves: "Saves", linkClicks: "Link clicks", leads: "Leads", orders: "Store orders" };
+const RANK_NAMES = [["template", "Template"], ["hook", "Hook"], ["slot", "Time of day"], ["weekday", "Day of the week"], ["platform", "Platform"], ["brand", "Brand"]];
+const SLOT_NAMES = { morning: "Morning", lunch: "Lunch", after_school: "After school", evening: "Evening" };
+const PLATFORM_NAMES = { facebook: "Facebook", instagram: "Instagram", tiktok: "TikTok", youtube: "YouTube", linkedin: "LinkedIn" };
+const perfLabel = (dim, key) => dim === "slot" ? SLOT_NAMES[key] ?? key : dim === "platform" ? PLATFORM_NAMES[key] ?? key : dim === "brand" ? brandName(key) : key;
+const perfValue = (m, v) => v === null || v === undefined ? "No data yet" : m === "watchSeconds" ? `${(v / 3600).toFixed(1)} hours` : Number(v).toLocaleString();
+
+async function pagePerformance() {
+  shell("performance", `<h1 class="title">Performance</h1><p class="muted" style="margin:0 0 20px">How each video did against the goal it was made for. A score of 100 is a typical post for its goal.</p><div id="perf"><p class="muted">Loading…</p></div>`);
+  const d = await api("GET", `/api/performance?brand=${encodeURIComponent(state.brand)}`);
+  const box = $("#perf");
+  if (!box) return;
+  const rank = (rows, dim) => !rows?.length ? `<p class="muted small">Nothing to rank yet.</p>` : `<table><tbody>${rows.map((r) => `<tr><td>${esc(perfLabel(dim, r.key))}${r.tooFew ? ' <span class="tag">Too few to trust</span>' : ""}</td><td class="small muted" style="white-space:nowrap">${r.posts} ${r.posts === 1 ? "post" : "posts"}</td><td style="text-align:right"><b>${r.score}</b></td></tr>`).join("")}</tbody></table>`;
+  const cards = Object.entries(d.goals).map(([goal, g]) => `<div class="card"><h2>${esc(GOAL_NAMES[goal])}</h2>
+    <p class="muted small" style="margin:0 0 14px">${g.finalPosts} ${g.finalPosts === 1 ? "post" : "posts"} with a final 7 day score${g.earlyPosts ? `, ${g.earlyPosts} more with a 48 hour read` : ""}.</p>
+    <dl class="facts">${g.metrics.map((m) => `<dt>${esc(METRIC_NAMES[m])}</dt><dd>${esc(perfValue(m, g.totals[m]))}</dd>`).join("")}</dl>
+    ${g.finalPosts ? RANK_NAMES.filter(([dim]) => dim !== "brand" || g.ranks.brand.length > 1).map(([dim, label]) => `<h3 class="sub">${esc(label)}</h3><div class="table-wrap">${rank(g.ranks[dim], dim)}</div>`).join("") : ""}
+  </div>`).join("");
+  const scored = d.posts.filter((p) => p.reading || p.boosted);
+  const list = !scored.length ? `<p class="muted small" style="margin:0">Posts show up here 48 hours after they go out.</p>` : `<div class="table-wrap"><table><thead><tr><th>Post</th><th>Platform</th><th>Goal</th><th>Read</th><th>Score</th>${d.canMark ? "<th>Boosted</th>" : ""}</tr></thead><tbody>
+    ${scored.map((p) => `<tr data-job="${esc(p.job)}" data-platform="${esc(p.platform)}" data-key="${esc(p.itemKey)}"><td><a href="#/videos/${esc(p.job)}">${esc(p.hook || p.campaign)}</a><div class="small muted">${esc(p.itemKey)}${p.scheduledAt ? `, ${esc(when(p.scheduledAt))}` : ""}</div></td><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${esc(GOAL_NAMES[p.goal] ?? p.goal)}</td><td>${esc(p.reading === "7d" ? "Final" : p.reading === "48h" ? "48 hours" : "")}</td><td><b>${p.boosted ? "Paid" : p.score ?? ""}</b></td>${d.canMark ? `<td><input type="checkbox" aria-label="This post was boosted" data-boost ${p.boosted ? "checked" : ""}></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+  const start = d.baseline.length ? `<div class="card"><h2>Where we started</h2><div class="table-wrap"><table><thead><tr><th>Platform</th><th>Followers</th><th>Average views</th><th>As of</th></tr></thead><tbody>${d.baseline.map((b) => `<tr><td>${esc(PLATFORM_NAMES[b.platform] ?? b.platform)}</td><td>${b.followers === null ? "" : Number(b.followers).toLocaleString()}</td><td>${b.avg_views === null ? "" : Math.round(b.avg_views).toLocaleString()}</td><td>${esc(b.as_of)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
+  box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${d.lastPull ? `Numbers last pulled ${esc(ago(d.lastPull))}.` : "No numbers pulled from the platforms yet."} Facebook and Instagram reels have full numbers so far. Rankings use final 7 day scores and leave out paid posts.</p>${cards}<div class="card"><h2>Posts</h2>${list}</div>${start}`;
+  box.querySelectorAll("[data-boost]").forEach((el) => {
+    el.onchange = async () => {
+      const row = el.closest("tr");
+      el.disabled = true;
+      try { await api("POST", "/api/performance/boosted", { job: row.dataset.job, platform: row.dataset.platform, itemKey: row.dataset.key, boosted: el.checked }); await pagePerformance(); }
+      catch (e) { el.checked = !el.checked; el.disabled = false; alert(e.message); }
+    };
+  });
+}
+
 function route() {
   stopTimer();
   if (!state.me) return showLogin();
@@ -1417,6 +1453,7 @@ function route() {
   if (parts[0] === "videos" && parts[1]) return pageVideo(parts[1]).catch(fail);
   if (parts[0] === "render") return pageRender(params).catch(fail);
   if (parts[0] === "new") return pageNew(params).catch(fail);
+  if (parts[0] === "performance") return pagePerformance().catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "avatar") return pageAvatar().catch(fail);
   if (parts[0] === "store") return pageStore().catch(fail);
