@@ -329,6 +329,11 @@ const WEEK = [
   { day: 5, name: "Instagram and Facebook story", cap: null, images: ["ad-story"], story: true },
 ];
 
+// The time slots, the same as SLOTS in src/tracking.ts. After day 0 the week walks through the slots that follow its time.
+const SLOTS = [{ time: "08:00", until: "11:00" }, { time: "11:30", until: "14:30" }, { time: "15:30", until: "17:30" }, { time: "19:30", until: "24:00" }];
+const LATER_DAYS = [1, 2, 4, 5];
+const timeOnDay = (startTime, n) => n === 0 ? startTime : SLOTS[(Math.max(SLOTS.findIndex((s) => startTime < s.until), 0) + 1 + LATER_DAYS.indexOf(n)) % SLOTS.length].time;
+
 async function showPosting(j) {
   const box = $("#posting");
   if (!box) return;
@@ -348,7 +353,8 @@ async function showPosting(j) {
   const taskLine = !task ? "" : task.busy
     ? `<div class="notice">${task.kind === "page" ? "The desktop is making the images and the preview (2 or 3 minutes)" : "The desktop is posting"}… <span class="muted small">${esc(task.message ?? "")}</span></div>`
     : task.status === "failed" ? `<div class="error">${task.kind === "page" ? "The preview didn't build" : "Posting didn't finish"}: ${esc((task.message ?? "").split("\n")[0])}</div>` : "";
-  const posted = (p?.posted ?? []).map((x) => `<li>${esc(x.platform ?? x.key)}${x.scheduleDate ? `: ${esc(when(x.scheduleDate))}` : ""}${x.status ? ` <span class="muted small">(${esc(x.status)})</span>` : ""}</li>`).join("");
+  // Instagram and TikTok captions can't carry a link, so their tracking link has to go in the bio to count.
+  const posted = (p?.posted ?? []).map((x) => `<li>${esc(x.platform ?? x.key)}${x.scheduleDate ? `: ${esc(when(x.scheduleDate))}` : ""}${x.status ? ` <span class="muted small">(${esc(x.status)})</span>` : ""}${x.link && ["instagram", "tiktok"].includes(x.platform) ? `<div class="muted small" style="overflow-wrap:anywhere">Bio link: ${esc(x.link)}</div>` : ""}</li>`).join("");
   box.innerHTML = `<div class="card" id="postCard"><h2>Page and posts</h2>
     ${live ? `<div class="notice"><b>Posted.</b> ${p.liveUrl ? `The page is live at <a href="${esc(p.liveUrl)}" target="_blank" rel="noopener">${esc(p.liveUrl.replace(/^https:\/\//, ""))}</a>.` : ""}${posted ? ` Scheduled in HighLevel:<ul class="small">${posted}</ul>` : " Check HighLevel's Social Planner for the posts."}<div class="small muted">Approved by ${esc(p.approvedBy ?? "")}, ${esc(when(p.approvedAt))}</div></div>`
       : `<p class="muted small" style="margin:0 0 14px">${d.program
@@ -368,16 +374,16 @@ async function showPosting(j) {
       ${WEEK_BOXES.map(([k, l]) => field(`captions.${k}`, l, "textarea", copy.captions[k])).join("")}
       <h3 class="sub">Words on the images</h3>
       ${IMAGE_BOXES.map(([k, l, kind, hint]) => field(`images.${k}`, l, kind, copy.images[k], hint)).join("")}
-      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Every post for the week as it'll go to HighLevel: the video on the day and time you pick below, the rest at 11:30 on later days. The words update as you type; ${p?.stills?.length ? "press <b>Build Preview</b> again after changing the words on the images." : "press <b>Build Preview</b> to make the images."}</p>
+      <h3 class="sub">What goes out</h3><p class="muted small" style="margin:0 0 10px">Every post for the week as it'll go to HighLevel: the video on the day and time below, the rest on later days at different times of day. The words update as you type; ${p?.stills?.length ? "press <b>Build Preview</b> again after changing the words on the images." : "press <b>Build Preview</b> to make the images."}</p>
       <div id="feed"></div>
       ${d.program ? "" : p?.previewUrl ? `<h3 class="sub">The page</h3><p class="muted small" style="margin:0 0 10px">The preview as a phone sees it. <a href="${esc(p.previewUrl)}" target="_blank" rel="noopener">Open it full size</a>.${live ? "" : " Press Build Preview again after changing the page wording."}</p>
         <div class="phone"><iframe src="${esc(p.previewUrl)}" title="Page preview" loading="lazy"></iframe></div>`
         : `<p class="muted small">Press <b>Build Preview</b> to see the page here too.</p>`}
       <h3 class="sub">When it starts</h3>
-      <p class="muted small" style="margin:0 0 10px">The video posts go out at this day and time (Eastern). Everything after follows a day at a time from there.</p>
+      <p class="muted small" style="margin:0 0 10px">The video posts go out at this day and time (Eastern). We rotate days and times on purpose so we can learn what works${p ? "" : ", so this starts on the one we've used least"}. Change it if this video needs a certain day. Later posts move through the other times of day.</p>
       <div class="row" style="align-items:flex-end;margin-bottom:16px">
-        <div class="field" style="margin:0;max-width:200px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
-        <div class="field" style="margin:0;max-width:160px"><label for="pf-time">At</label><input type="time" id="pf-time" data-pk="startTime" step="300" value="${esc(p?.startTime ?? "11:30")}" ${locked ? "disabled" : ""}></div>
+        <div class="field" style="margin:0;max-width:200px"><label for="pf-start">Post on</label><input type="date" id="pf-start" data-pk="start" value="${esc(p?.start ?? d.suggested?.start ?? new Date(Date.now() + 86400000).toISOString().slice(0, 10))}" ${locked ? "disabled" : ""}></div>
+        <div class="field" style="margin:0;max-width:160px"><label for="pf-time">At</label><input type="time" id="pf-time" data-pk="startTime" step="300" value="${esc(p?.startTime ?? d.suggested?.startTime ?? "11:30")}" ${locked ? "disabled" : ""}></div>
         ${locked ? "" : `<button class="btn outline small" type="button" id="postSoon">Soon (30 min)</button>`}
       </div>
       ${locked ? "" : `<div class="row"><button class="btn outline" type="button" id="postSave">Save</button><button class="btn outline" type="button" id="postPreview">${d.program ? "Make the Images" : "Build Preview"}</button>${d.canApprove
@@ -406,7 +412,7 @@ async function showPosting(j) {
     const img = (n, cls = "") => made.has(n)
       ? `<img class="${cls}" src="/api/jobs/${j.id}/stills/${n}?v=${encodeURIComponent(p.stillsAt ?? "")}" alt="">`
       : `<div class="noimg ${cls}">Press Build Preview to make this image</div>`;
-    const dayOf = (n) => { if (!v.start) return ""; const t = new Date(`${v.start}T${n === 0 ? v.startTime || "11:30" : "11:30"}:00`); t.setDate(t.getDate() + n); return t.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+    const dayOf = (n) => { if (!v.start) return ""; const t = new Date(`${v.start}T${timeOnDay(v.startTime || "11:30", n)}:00`); t.setDate(t.getDate() + n); return t.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
     const anyFeed = has("instagram") || has("facebook");
     const steps = WEEK.filter((w) => (w.story ? anyFeed : has(w.cap)));
     if (!steps.length) { el.innerHTML = `<p class="muted small">No captions yet, so nothing would be posted.</p>`; return; }
