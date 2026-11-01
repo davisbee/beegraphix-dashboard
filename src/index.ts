@@ -39,6 +39,7 @@
 //
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
+//     POST /api/desktop/stats                     {posts?, baselines?}: platform numbers and the starting snapshot (tracking.ts)
 //     PUT  /api/desktop/catalog                   {campaigns: [{brand, campaign, title, variants: [{id, label}]}], features?: ["heygen"]}
 //     GET  /api/desktop/heygen/:videoId           an AI avatar clip: {status, url, message} (heygen.ts)
 //     GET  /api/desktop/voice/:jobId/:clip        one line of a faceless video's voiceover, MP3 (voiceover.ts)
@@ -57,6 +58,7 @@ import { avatarLines, campaignId, draftScript, validateSpec } from "./build";
 import { FORMATS } from "./formats";
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./drafts";
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
+import { putStats } from "./tracking";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopVoice, speakLines, voicesRoute } from "./voiceover";
@@ -433,6 +435,7 @@ async function route(req: Request, env: Env): Promise<Response> {
     requireDesktop(req, env);
     if (m === "POST" && p === "/api/desktop/claim") return claim(env);
     if (m === "PUT" && p === "/api/desktop/catalog") return putCatalog(req, env);
+    if (m === "POST" && p === "/api/desktop/stats") return putStats(req, env);
     const dv = p.match(/^\/api\/desktop\/voice\/([0-9a-f-]{36})\/([a-z0-9-]{1,40})$/);
     if (m === "GET" && dv) return desktopVoice(env, dv[1], dv[2]);
     const hv = p.match(/^\/api\/desktop\/heygen\/([^/]+)$/);

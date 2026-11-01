@@ -12,6 +12,7 @@ import { HttpError, body, json, now, type Env } from "./common";
 import type { Caller } from "./auth";
 import { BRAND_NOTES, DRAFTS_PER_HOUR, MODEL, str } from "./build";
 import { formatOf } from "./formats";
+import { easternNow, laterTimes, saveFeatures, suggestSchedule } from "./tracking";
 
 // Only BeeGraphix has a blog and a HighLevel login on the desktop so far (Rugbee comes with stage 5).
 const POSTING_BRANDS = ["beegraphix"];
@@ -28,7 +29,7 @@ type Copy = { page: Record<keyof typeof PAGE_FIELDS, string>; captions: Record<k
 const STILL = /^(carousel-\d{1,2}|ad-linkedin|ad-story|teaser-[12]-feed)$/;
 
 interface PostRow {
-  campaign: string; brand: string; source_job: string; variant: string; slug: string | null; copy: string; start_date: string | null; start_time: string | null;
+  campaign: string; brand: string; source_job: string; variant: string; slug: string | null; copy: string; start_date: string | null; start_time: string | null; suggested_start: string | null; suggested_time: string | null;
   task_job: string | null; task_kind: string | null; preview_url: string | null; live_url: string | null; posted: string | null;
   approved_by: string | null; approved_at: string | null; updated_by: string; updated_at: string; stills: string | null; stills_at: string | null;
 }
@@ -87,6 +88,8 @@ async function view(env: Env, c: Caller, s: Awaited<ReturnType<typeof source>>) 
     // A program's posts send people to the program's own page.
     link: program ? withHttps(s.spec?.products?.[0]?.link ?? "") : r?.slug ? `https://${BLOG}/${r.slug}/` : "",
     canApprove: c.admin,
+    // What the rotation offers until someone saves (then the post's own day and time).
+    suggested: r || !s.spec || !POSTING_BRANDS.includes(s.job.brand) ? null : await suggestSchedule(env, s.job.brand, s.campaign),
     suggestedSlug: r?.slug ?? (program || !s.spec ? null : await freeSlug(env, s.campaign, String(s.spec.title ?? ""))),
     videoReady: s.job.status === "done",
     post: r && {
@@ -109,15 +112,9 @@ async function notBusy(env: Env, r: PostRow | null) {
   if (t && ACTIVE.includes(t.status)) throw new HttpError(409, "The desktop is still working on this. Wait for it to finish.");
 }
 
-/** When the day 0 posts go out unless someone picks a time (the rest of the week always goes at this time). */
+/** Only for posts saved before the rotation; new ones get their day and time from suggestSchedule(). */
 export const DEFAULT_TIME = "11:30";
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-/** Today's date and the time now in Eastern time, as "YYYY-MM-DD" and "HH:MM", the way people pick them. */
-export function easternNow(at = new Date()) {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(at).map((x) => [x.type, x.value]));
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
-}
 
 /** Saves copy, slug, start date and the day 0 time (creating the row the first time). */
 async function save(env: Env, c: Caller, s: Awaited<ReturnType<typeof source>>, b: { slug?: unknown; copy?: unknown; start?: unknown; startTime?: unknown }) {
@@ -128,19 +125,21 @@ async function save(env: Env, c: Caller, s: Awaited<ReturnType<typeof source>>, 
   const slug = program ? null : String(b.slug ?? r?.slug ?? "").trim().toLowerCase();
   if (!program && !SLUG.test(slug!)) throw new HttpError(400, "The page address can use lowercase letters, numbers and dashes (3 to 61 characters)");
   if (slug && await env.DB.prepare("SELECT 1 FROM posts WHERE slug = ? AND campaign != ?").bind(slug, s.campaign).first()) throw new HttpError(409, "Another video already uses that page address");
-  const start = String(b.start || r?.start_date || tomorrow());
+  // The first save fixes what the rotation offered; "When it starts" can still override it.
+  const offer = r ? null : await suggestSchedule(env, s.job.brand, s.campaign);
+  const start = String(b.start || r?.start_date || offer?.start || tomorrow());
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || Number.isNaN(Date.parse(start))) throw new HttpError(400, "Pick a start date");
-  const startTime = String(b.startTime || r?.start_time || DEFAULT_TIME);
+  const startTime = String(b.startTime || r?.start_time || offer?.startTime || DEFAULT_TIME);
   if (!TIME.test(startTime)) throw new HttpError(400, "Pick a time for the first posts");
   const copy = readCopy(b.copy ?? (r ? JSON.parse(r.copy) : null));
   const t = now();
   await env.DB.prepare(
-    `INSERT INTO posts (campaign, brand, source_job, variant, slug, copy, start_date, start_time, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO posts (campaign, brand, source_job, variant, slug, copy, start_date, start_time, suggested_start, suggested_time, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (campaign) DO UPDATE SET source_job = excluded.source_job, variant = excluded.variant, slug = excluded.slug, copy = excluded.copy,
        start_date = excluded.start_date, start_time = excluded.start_time, preview_url = CASE WHEN posts.copy = excluded.copy AND IFNULL(posts.slug, '') = IFNULL(excluded.slug, '') AND posts.source_job = excluded.source_job THEN posts.preview_url END,
        stills = CASE WHEN json_extract(posts.copy, '$.images') IS json_extract(excluded.copy, '$.images') AND IFNULL(posts.slug, '') = IFNULL(excluded.slug, '') AND posts.source_job = excluded.source_job THEN posts.stills END,
        updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-  ).bind(s.campaign, s.job.brand, s.job.id, s.variant, slug, JSON.stringify(copy), start, startTime, who(c), t).run();
+  ).bind(s.campaign, s.job.brand, s.job.id, s.variant, slug, JSON.stringify(copy), start, startTime, offer?.start ?? null, offer?.startTime ?? null, who(c), t).run();
 }
 
 export async function getPost(env: Env, c: Caller, jobId: string) {
@@ -268,6 +267,7 @@ async function queue(env: Env, c: Caller, s: Awaited<ReturnType<typeof source>>,
   const t = now();
   const payload = {
     campaign: s.campaign, variant: r.variant, format: s.format?.id, slug: r.slug, copy, start: r.start_date, startTime: r.start_time ?? DEFAULT_TIME,
+    sourceJob: r.source_job, times: laterTimes(r.start_time ?? DEFAULT_TIME),
     link: program ? withHttps(s.spec.products?.[0]?.link ?? "") : `${BLOG}/${r.slug}`,
   };
   await env.DB.batch([
@@ -322,7 +322,7 @@ export async function approvePost(req: Request, env: Env, c: Caller, jobId: stri
 }
 
 /** The desktop finished a page or publish job: keep what it reported. */
-export async function taskFinished(env: Env, j: Job, result: { previewUrl?: unknown; liveUrl?: unknown; posted?: unknown; stills?: unknown }) {
+export async function taskFinished(env: Env, j: Job, result: { previewUrl?: unknown; liveUrl?: unknown; posted?: unknown; stills?: unknown; video?: unknown }) {
   const url = (u: unknown) => (typeof u === "string" && /^https:\/\/[^\s"<>]+$/.test(u) ? u.slice(0, 500) : null);
   if (j.kind === "page") {
     const stills = Array.isArray(result.stills) ? result.stills.filter((n: unknown): n is string => typeof n === "string" && STILL.test(n)).slice(0, 30) : [];
@@ -330,6 +330,8 @@ export async function taskFinished(env: Env, j: Job, result: { previewUrl?: unkn
   } else if (j.kind === "publish") {
     const posted = Array.isArray(result.posted) ? JSON.stringify(result.posted.slice(0, 50)) : "[]";
     await env.DB.prepare("UPDATE posts SET live_url = ?, posted = ? WHERE task_job = ?").bind(url(result.liveUrl), posted.slice(0, 20000), j.id).run();
+    // The posts are already out by now, so a problem saving the tracking data can't fail the job.
+    await saveFeatures(env, j, result).catch((e) => console.error("post features", j.id, e));
   }
 }
 

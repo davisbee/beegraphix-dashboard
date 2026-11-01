@@ -230,6 +230,8 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: "x", copy: {} })).status, 400, "slug too short");
   const copy = { page: { title: "Hoodie | BeeGraphix", headline: "The hoodie your crew wears", description: "d" }, captions: { facebook: "Look — at this {url}" } };
   assert.equal((await call("POST", `/api/jobs/${id}/post/preview`, T.bgx)).status, 409, "needs copy and a finished video");
+  const offered = (await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.suggested;
+  assert.ok(["08:00", "11:30", "15:30", "19:30"].includes(offered.startTime), "the rotation offers a slot");
   const put = await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug, copy, start: "2099-01-05" });
   assert.equal(put.status, 200, JSON.stringify(put.data));
   assert.equal(put.data.post.copy.captions.facebook, "Look, at this {url}", "no em dashes");
@@ -278,7 +280,7 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.deepEqual(words.data.post.stills, []);
 
   assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.bgx, {})).status, 403, "staff can't approve");
-  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.startTime, "11:30", "11:30 unless someone picks a time");
+  assert.equal((await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post.startTime, offered.startTime, "the rotation's time unless someone picks one");
   assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { startTime: "25:00" })).status, 400, "a real time");
   // a date in the past, or a time today that's already gone, can't be approved
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -291,10 +293,18 @@ test("approve and post: copy, preview, only admins approve, and the desktop repo
   assert.equal(pub.payload.start, "2099-01-06");
   assert.equal(pub.payload.startTime, "14:25");
   assert.equal(pub.payload.link, `blog.beegraphix.com/${slug}`);
-  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { message: "Posted", result: { liveUrl: `https://blog.beegraphix.com/${slug}/`, posted: [{ platform: "facebook", status: "scheduled" }] } });
+  assert.equal(pub.payload.sourceJob, id, "the tracking links carry the video's job id");
+  assert.deepEqual(pub.payload.times, { 1: "15:30", 2: "19:30", 4: "08:00", 5: "11:30" }, "14:25 is lunch, so the week walks on from there");
+  const tracked = `https://blog.beegraphix.com/${slug}?utm_source=instagram&utm_id=${id}`;
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { message: "Posted", result: { liveUrl: `https://blog.beegraphix.com/${slug}/`, video: { seconds: 42.5, captionStyle: "creator" }, posted: [
+    { key: "d0-reel:facebook", platform: "facebook", status: "scheduled" },
+    { key: "d0-reel:instagram", platform: "instagram", status: "scheduled", scheduleDate: "2099-01-06T19:25:00.000Z", link: tracked, id: "ghl-1", type: "reel", day: 0 },
+    { key: "d0-reel:myspace", platform: "myspace", status: "scheduled" },
+  ] } });
   const after = (await call("GET", `/api/jobs/${id}/post`, T.bgx)).data.post;
   assert.equal(after.liveUrl, `https://blog.beegraphix.com/${slug}/`);
   assert.equal(after.posted[0].platform, "facebook");
+  assert.equal(after.posted[1].link, tracked, "the card can show the bio link");
   assert.equal((await call("PUT", `/api/jobs/${id}/post`, T.bgx, { copy })).status, 409, "posted ones are locked");
 
   // another video can't take the same address
@@ -328,4 +338,17 @@ test("a store ad's social images: the desktop sends one zip, staff download it",
   assert.ok(Buffer.from(await dl.arrayBuffer()).equals(zip));
   assert.equal((await fetch(`${BASE}/api/jobs/${id}/images`, { headers: { authorization: `Bearer ${T.rugbee}` } })).status, 404, "other brand");
   assert.equal((await call("PUT", `/api/desktop/jobs/${id}/images`, T.worker, null, zip)).status, 409, "not after the job is done");
+});
+
+test("the desktop sends stats and the starting snapshot", async () => {
+  const postId = `old-${Date.now().toString(36)}`;
+  const row = { source: "meta", postId, reading: "backfill", brand: "beegraphix", platform: "facebook", views: 100, boosted: true };
+  assert.equal((await call("POST", "/api/desktop/stats", T.bgx, { posts: [row] })).status, 401, "desktop only");
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { posts: [{ ...row, reading: "someday" }] })).status, 400);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { posts: [{ ...row, platform: "myspace" }] })).status, 400);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { baselines: [{ brand: "beegraphix", platform: "facebook", asOf: "soon", source: "meta" }] })).status, 400);
+  const ok = await call("POST", "/api/desktop/stats", T.worker, { posts: [row], baselines: [{ brand: "beegraphix", platform: "facebook", asOf: "2099-01-01", followers: 500, source: "meta" }] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.deepEqual([ok.data.posts, ok.data.baselines], [1, 1]);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { baselines: [{ brand: "beegraphix", platform: "facebook", asOf: "2099-01-01", followers: 999, source: "meta" }] })).status, 200, "sending it again is safe");
 });
