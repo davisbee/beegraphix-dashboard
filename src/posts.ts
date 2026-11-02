@@ -33,7 +33,7 @@ interface PostRow {
   task_job: string | null; task_kind: string | null; preview_url: string | null; live_url: string | null; posted: string | null;
   approved_by: string | null; approved_at: string | null; updated_by: string; updated_at: string; stills: string | null; stills_at: string | null;
 }
-interface Job { id: string; brand: string; kind: string; payload: string; status: string; message: string | null }
+interface Job { id: string; brand: string; kind: string; payload: string; status: string; message: string | null; removed_at: string | null }
 
 const who = (c: Caller) => c.user?.name || c.label;
 // Brand rule: no em dashes in anything customers read.
@@ -304,6 +304,7 @@ export async function approvePost(req: Request, env: Env, c: Caller, jobId: stri
   const s = await source(env, c, jobId);
   check(s);
   if (!c.admin) throw new HttpError(403, "Only an admin can approve and post.");
+  if (s.job.removed_at) throw new HttpError(409, "This video was removed. Restore it first.");
   const b = await body<{ start?: string; startTime?: string }>(req);
   const r0 = await rowOf(env, s.campaign);
   await notBusy(env, r0);

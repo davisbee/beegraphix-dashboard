@@ -261,8 +261,25 @@ function showReset(token) {
 
 // ---------- videos ----------
 
-async function pageVideos() {
-  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first. To make one, use Create.")}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>`);
+async function pageVideos(removed = false) {
+  if (removed) {
+    // Videos an admin removed. Open one to restore it.
+    shell("videos", `${header(brandName(state.brand), "Removed Videos", "Taken off the Videos list. Nothing was erased: open one and press Restore to bring it back.")}
+      <p class="small" style="margin:0 0 16px"><a href="#/videos">← All videos</a></p><div id="list"><div class="card empty">Loading…</div></div>`);
+    const qs = `?removed=1${state.brands.length > 1 ? `&brand=${state.brand}` : ""}`;
+    const { jobs } = await api("GET", `/api/jobs${qs}`);
+    const list = $("#list");
+    if (!list) return;
+    list.innerHTML = jobs.length
+      ? `<div class="jobs">${jobs.map((j) => `<a class="job" href="#/videos/${j.id}">
+          <div class="job-title">${esc(jobTitle(j).title)}</div>${statusPill(j)}
+          <div class="job-meta">Removed by ${esc(j.removedBy ?? "")} · ${esc(ago(j.removedAt))}</div>
+        </a>`).join("")}</div>`
+      : `<div class="card empty"><p>No removed videos.</p></div>`;
+    return;
+  }
+  shell("videos", `${header(brandName(state.brand), "Videos", "Everything your team has asked the desktop to build, newest first. To make one, use Create.")}<div id="drafts"></div><div id="list"><div class="card empty">Loading…</div></div>
+    ${state.me.role === "admin" ? `<p class="small muted" style="margin:16px 0 0"><a href="#/videos?removed">Removed videos</a></p>` : ""}`);
   // Drafts: videos someone saved to finish later (usually waiting on footage).
   const showDrafts = async () => {
     const { drafts } = await api("GET", `/api/drafts?brand=${state.brand}`);
@@ -499,7 +516,9 @@ async function pageVideo(id) {
       storeAd && j.payload.spec.caption ? `<button class="btn outline" type="button" id="copyCaption">Copy Caption</button>` : "",
       j.hasImages ? `<a class="btn outline" href="/api/jobs/${j.id}/images">Download Images (.zip)</a>` : "",
       j.status === "queued" ? `<button class="btn outline" id="cancel">Cancel</button>` : "",
-      ["done", "failed", "cancelled"].includes(j.status) ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
+      ["done", "failed", "cancelled"].includes(j.status) && !j.removedAt ? `<a class="btn outline" href="#/render?campaign=${encodeURIComponent(j.payload.campaign)}&variant=${encodeURIComponent(j.payload.variant)}">Render Again</a>` : "",
+      state.me.role === "admin" && j.removedAt ? `<button class="btn outline" type="button" id="restore">Restore</button>` : "",
+      state.me.role === "admin" && !j.removedAt && !j.posted && ["done", "failed", "cancelled"].includes(j.status) ? `<button class="btn outline" type="button" id="remove">Remove</button>` : "",
     ].join("");
     const html = `
       <p class="small" style="margin:0 0 16px"><a href="#/videos">← All videos</a></p>
@@ -508,6 +527,7 @@ async function pageVideo(id) {
         <div>
           <div class="card">
             <div class="eyebrow">${esc(brandName(j.brand))}</div>
+            ${j.removedAt ? `<div class="notice">Removed by ${esc(j.removedBy ?? "")} ${esc(ago(j.removedAt))}. It's off the Videos list until someone restores it.</div>` : ""}
             <h1 class="title" style="font-size:26px;line-height:32px">${esc(t.title)}</h1>
             <p class="muted" style="margin:4px 0 12px">${esc(t.variant)}${j.payload.draft ? " · quick preview (720p)" : ""}${j.kind === "build" ? " · new video" : ""}</p>
             ${statusPill(j)}
@@ -523,7 +543,7 @@ async function pageVideo(id) {
           </div>
           ${storeAd ? `<div class="card"><h2>For the store owner</h2><p class="muted small" style="margin:0 0 12px">Download the video and send it with this caption. They post it themselves.</p>
             <p style="margin:0">${esc(j.payload.spec.caption ?? "")}</p><p class="small muted" style="margin:12px 0 0"><a href="${esc(j.payload.spec.storeUrl)}" target="_blank" rel="noopener">Open the store</a></p></div>` : ""}
-          ${j.status === "done" && !storeAd ? `<div id="numbers"></div><div id="posting"></div>` : ""}
+          ${j.status === "done" && !storeAd && !j.removedAt ? `<div id="numbers"></div><div id="posting"></div>` : ""}
         </div>
       </div>`;
     if (player === null) {
@@ -538,6 +558,14 @@ async function pageVideo(id) {
     const cc = $("#copyCaption");
     if (cc) cc.onclick = () => copyScript(cc, j.payload.spec.caption);
     if (cancel) cancel.onclick = async () => { cancel.disabled = true; await api("POST", `/api/jobs/${j.id}/cancel`).catch((e) => alert(e.message)); refresh(); };
+    const remove = $("#remove");
+    if (remove) remove.onclick = async () => {
+      if (!confirm("Remove this video? It and its unposted page and captions come off the Videos list. You can restore it from Removed videos.")) return;
+      remove.disabled = true;
+      try { await api("POST", `/api/jobs/${j.id}/remove`); location.hash = "#/videos"; } catch (e) { alert(e.message); remove.disabled = false; }
+    };
+    const restore = $("#restore");
+    if (restore) restore.onclick = async () => { restore.disabled = true; await api("POST", `/api/jobs/${j.id}/restore`).catch((e) => alert(e.message)); refresh(); };
     if ($("#numbers")) showNumbers(j).catch(() => {});
     if ($("#posting")) showPosting(j).catch((e) => { const b = $("#posting"); if (b) b.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="bad">${esc(e.message)}</p></div>`; });
     stopTimer();
@@ -1616,7 +1644,7 @@ function route() {
   if (parts[0] === "connections") return pageConnections(params).catch(fail);
   if (parts[0] === "store") return pageStore().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
-  return pageVideos().catch(fail);
+  return pageVideos(params.has("removed")).catch(fail);
 }
 
 async function start() {

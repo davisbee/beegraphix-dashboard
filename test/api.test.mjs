@@ -133,3 +133,25 @@ test("cancelled jobs are never handed to the desktop", async () => {
   assert.equal((await call("POST", `/api/jobs/${j.id}/cancel`, T.bgx)).data.status, "cancelled");
   assert.equal((await call("POST", "/api/desktop/claim", T.worker)).status, 204);
 });
+
+test("an admin removes a finished video from the list and restores it", async () => {
+  await drain();
+  const j = (await call("POST", "/api/jobs", T.bgx, { campaign: "unwanted", variant: "v" })).data;
+  assert.equal((await call("POST", `/api/jobs/${j.id}/remove`, T.admin)).status, 409, "a queued job is cancelled, not removed");
+  await call("POST", `/api/jobs/${j.id}/cancel`, T.bgx);
+  assert.equal((await call("POST", `/api/jobs/${j.id}/remove`, T.bgx)).status, 403, "only an admin");
+  assert.equal((await call("POST", `/api/jobs/${j.id}/remove`, T.rugbee)).status, 403);
+
+  const removed = await call("POST", `/api/jobs/${j.id}/remove`, T.admin);
+  assert.equal(removed.status, 200);
+  assert.ok(removed.data.removedAt);
+  const ids = async (qs) => (await call("GET", `/api/jobs${qs}`, T.bgx)).data.jobs.map((x) => x.id);
+  assert.ok(!(await ids("")).includes(j.id), "off the Videos list");
+  assert.ok((await ids("?removed=1")).includes(j.id), "on the removed list");
+  assert.equal((await call("GET", `/api/jobs/${j.id}`, T.bgx)).status, 200, "still opens, so it can be restored");
+
+  const back = await call("POST", `/api/jobs/${j.id}/restore`, T.admin);
+  assert.equal(back.data.removedAt, null);
+  assert.ok((await ids("")).includes(j.id));
+  assert.ok(!(await ids("?removed=1")).includes(j.id));
+});
