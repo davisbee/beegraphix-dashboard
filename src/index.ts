@@ -69,6 +69,7 @@ import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putSti
 import { putStats } from "./tracking";
 import { getPerformance, linkEvent, markBoosted, statsDue } from "./performance";
 import { getWeekly, sendWeekly, sendWeeklyNow } from "./weekly";
+import { decide, getPlaybook, retire } from "./playbook";
 import { connectionBrand, disconnectYouTube, listConnections, requireAdmin, startYouTube, youtubeCallback } from "./connections";
 import { jobStats, pullAllYouTube, pullNow, youtubeList } from "./youtube";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
@@ -502,6 +503,10 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/performance/boosted" && m === "POST") return markBoosted(req, env, c);
   if (p === "/api/performance/weekly" && m === "GET") return getWeekly(env, c, url);
   if (p === "/api/performance/weekly/send" && m === "POST") return sendWeeklyNow(env, c);
+  if (p === "/api/playbook" && m === "GET") return getPlaybook(env, c, url);
+  if (p === "/api/playbook" && m === "POST") return decide(req, env, c);
+  const pr = p.match(/^\/api\/playbook\/([0-9a-f-]{36})\/retire$/);
+  if (pr && m === "POST") return retire(env, c, pr[1]);
   if (p === "/api/youtube" && m === "GET") return youtubeList(env, c, url);
   if (p === "/api/connections" && m === "GET") return listConnections(env, c);
   if (p === "/api/connections/youtube/start" && m === "POST") return startYouTube(url, env, c);

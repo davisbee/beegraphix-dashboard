@@ -2,11 +2,12 @@
 // to WEEKLY_REPORT_TO every Monday morning, right after the YouTube pull.
 //
 // It only reads what's already saved: post_stats, post_features, link_events, platform_baseline and HighLevel's
-// 7 day account_stats. Its findings are suggestions for the playbook. Nothing changes because of them.
+// 7 day account_stats. Its findings are suggestions: an admin approves or rejects each for the playbook (playbook.ts).
 
 import { HttpError, json, type Env } from "./common";
 import type { Caller } from "./auth";
 import { askedBrand, performanceData, type ScoredPost } from "./performance";
+import { playbookRows, scoreNow, suggestedRule } from "./playbook";
 
 const DAY = 86400_000;
 const PLATFORMS = ["facebook", "instagram", "tiktok", "youtube", "linkedin"];
@@ -27,8 +28,9 @@ export async function weeklyReport(env: Env, brand: string, at = Date.now()) {
   const all = brand === "*";
   const and = (col = "brand") => (all ? "" : ` AND ${col} = ?`);
   const b = all ? [] : [brand];
-  const [perf, [posted, links, coming, accounts]] = await Promise.all([
+  const [perf, decisions, [posted, links, coming, accounts]] = await Promise.all([
     performanceData(env, brand),
+    playbookRows(env, brand),
     env.DB.batch([
       env.DB.prepare(`SELECT platform, source, post_id, views, read_at FROM post_stats WHERE posted_at >= ? AND posted_at < ? AND reading != 'backfill'${and()}`).bind(from, to, ...b),
       // Counts are lifetime, so a video shows here if anyone clicked or asked for a quote this week.
@@ -81,15 +83,29 @@ export async function weeklyReport(env: Env, brand: string, at = Date.now()) {
   const best = scored.slice(0, 3);
   const worst = scored.slice(3).slice(-3).reverse();
 
+  // Already approved or rejected: no need to ask again. A retired rule can come back.
+  const decided = new Set(decisions.filter((d) => d.status !== "retired").map((d) => `${d.goal}|${d.dimension}|${d.key}`));
   const findings = Object.entries(perf.goals).flatMap(([goal, g]) => FINDING_DIMENSIONS.flatMap((dimension) => {
     const trusted = (g.ranks[dimension] ?? []).filter((r) => !r.tooFew);
     if (trusted.length < 2) return []; // nothing to compare it with
-    return trusted.filter((r) => r.score >= HIGH || r.score <= LOW).map((r) => ({ goal, dimension, key: r.key, score: r.score, posts: r.posts }));
+    return trusted.filter((r) => (r.score >= HIGH || r.score <= LOW) && !decided.has(`${goal}|${dimension}|${r.key}`))
+      .map((r) => ({ goal, dimension, key: r.key, score: r.score, posts: r.posts, rule: suggestedRule(goal, dimension, r.key, r.score) }));
   })).sort((x, y) => Math.abs(y.score - 100) - Math.abs(x.score - 100)).slice(0, 6);
+
+  // The playbook: what was approved this week, and approved rules whose score has crossed back over 100.
+  const approved = decisions.filter((d) => d.status === "approved" && d.rule);
+  const playbook = {
+    added: approved.filter((d) => d.decided_at >= from).map((d) => ({ rule: d.rule!, by: d.decided_by })),
+    slipping: approved.flatMap((d) => {
+      const at = scoreNow(perf.goals, d.goal, d.dimension, d.key);
+      if (!at || at.tooFew || d.score_at === null || (d.score_at >= 100) === (at.score >= 100)) return [];
+      return [{ id: d.id, rule: d.rule!, scoreAt: d.score_at, scoreNow: at.score }];
+    }),
+  };
 
   const next = coming.results as Array<{ platform: string; going_out: number | null; final_reads: number | null }>;
   return {
-    brand, from, to, lastPull: perf.lastPull, platforms, best, worst, findings,
+    brand, from, to, lastPull: perf.lastPull, platforms, best, worst, findings, playbook,
     links: (links.results as Array<{ job_id: string; title: string | null; clicks: number; leads: number }>).map((l) => ({ job: l.job_id, title: l.title ?? "A video", clicks: l.clicks, leads: l.leads })),
     goingOut: next.reduce((a, r) => a + (r.going_out ?? 0), 0),
     finalReads: next.reduce((a, r) => a + (r.final_reads ?? 0), 0),
@@ -158,11 +174,15 @@ function emailText(r: Report) {
   lines.push("", "NEXT WEEK", nextWeek(r), "", "WORTH A LOOK");
   if (!r.findings.length) lines.push(NO_FINDINGS);
   else lines.push(...r.findings.map(findingLine), "", FINDINGS_NOTE);
+  if (r.playbook.added.length || r.playbook.slipping.length) {
+    lines.push("", "PLAYBOOK", ...r.playbook.added.map((x) => `Approved this week: ${x.rule}`), ...r.playbook.slipping.map(slipLine));
+  }
   return lines.join("\n");
 }
 
+const slipLine = (x: Report["playbook"]["slipping"][number]) => `No longer holding up: ${x.rule} It scored ${x.scoreAt} when it was approved and ${x.scoreNow} now. Retire it on the Playbook page if that sticks.`;
 const NO_FINDINGS = "Nothing yet. A finding needs at least 3 posts with a final 7 day score in each group it compares.";
-const FINDINGS_NOTE = "These are hunches, not rules. Nothing changes until you approve one for the playbook.";
+const FINDINGS_NOTE = "These are hunches, not rules. Approve or reject each one on the This Week page. Approved hooks and formats steer Draft It For Me.";
 const nextWeek = (r: Report) => `${r.goingOut} ${r.goingOut === 1 ? "post goes" : "posts go"} out, and ${r.finalReads} ${r.finalReads === 1 ? "post gets its" : "posts get their"} final 7 day read.`;
 
 function emailHtml(r: Report) {
@@ -180,5 +200,6 @@ ${r.worst.length ? `${h("Weakest posts")}${posts(r.worst)}` : ""}
 ${h("Clicks and leads")}${r.links.length ? table(["Video", "Clicks", "Leads"], r.links.map((l) => [l.title, l.clicks, l.leads])) : p("No clicks on a tracked link this week.")}
 ${h("Next week")}${p(nextWeek(r))}
 ${h("Worth a look")}${r.findings.length ? r.findings.map((f) => p(findingLine(f))).join("") + `<p style="margin:0 0 10px;color:#6b6b6b;font-size:14px">${esc(FINDINGS_NOTE)}</p>` : p(NO_FINDINGS)}
+${r.playbook.added.length || r.playbook.slipping.length ? h("Playbook") + r.playbook.added.map((x) => p(`Approved this week: ${x.rule}`)).join("") + r.playbook.slipping.map((x) => p(slipLine(x))).join("") : ""}
 <p style="margin:32px 0"><a href="${APP_URL}/#/week" style="background:#F9B023;color:#1d1d1f;text-decoration:none;font-weight:bold;padding:12px 22px;border-radius:999px;display:inline-block">See the Whole Week</a></p></div>`;
 }
