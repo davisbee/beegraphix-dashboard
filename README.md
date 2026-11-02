@@ -115,10 +115,20 @@ Performance's **This Week** page (`#/week`, `src/weekly.ts`) shows the last 7 da
 platform against its Oct 31 starting point (HighLevel's 7 day posts, new followers and reach, plus average views
 read so far), the best and weakest scored posts from the last 2 weeks, clicks and leads on tracked links, what's
 coming next week, and findings worth a look. A finding is a template, hook, time, day or platform that scored 120
-or more, or 80 or less, with at least 3 final 7 day reads. Findings are only suggestions for the playbook.
+or more, or 80 or less, with at least 3 final 7 day reads, in a group with at least one other to compare.
 
 Every Monday, right after the YouTube pull, the cron emails the BeeGraphix report through Resend to the people in
 `WEEKLY_REPORT_TO` (`wrangler.jsonc` vars). An admin can also send it straight away with **Email It Now**.
+
+## Playbook
+
+Each "worth a look" finding on This Week has **Approve** and **Reject** for admins, with one brand picked. Approving
+saves a one-line rule (a suggested line the admin can rewrite) and an optional note to the `playbook` table
+(migration 0013, `src/playbook.ts`). **Draft It For Me** adds the brand's approved hook rules, and template rules for
+the format being drafted, to its prompt for the same goal. Time, day and platform rules are listed for whoever
+schedules posts. A decided finding stops showing on This Week. The **Playbook** page lists every rule with its score
+then and now; an admin can **Retire** a rule or **Bring Back** a rejected finding so it can be decided again. The
+Monday email lists rules approved that week and any whose score has crossed back over 100.
 
 ## Cloudflare resources
 

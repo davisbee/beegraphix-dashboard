@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/performance, #/week, #/youtube, #/new, #/store, #/render, #/team, #/avatar, #/connections, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/performance, #/week, #/playbook, #/youtube, #/new, #/store, #/render, #/team, #/avatar, #/connections, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -1419,7 +1419,7 @@ const perfLabel = (dim, key) => dim === "slot" ? SLOT_NAMES[key] ?? key : dim ==
 const perfValue = (m, v) => v === null || v === undefined ? "No data yet" : m === "watchSeconds" ? `${(v / 3600).toFixed(1)} hours` : Number(v).toLocaleString();
 
 async function pagePerformance() {
-  shell("performance", `${header("", "Performance", "How each video did against the goal it was made for. A score of 100 is a typical post for its goal.", `<a class="btn outline" href="#/week">This Week</a> <a class="btn outline" href="#/youtube">YouTube Shorts by Views</a>`)}<div id="perf"><p class="muted">Loading…</p></div>`);
+  shell("performance", `${header("", "Performance", "How each video did against the goal it was made for. A score of 100 is a typical post for its goal.", `<a class="btn outline" href="#/week">This Week</a> <a class="btn outline" href="#/playbook">Playbook</a> <a class="btn outline" href="#/youtube">YouTube Shorts by Views</a>`)}<div id="perf"><p class="muted">Loading…</p></div>`);
   const d = await api("GET", `/api/performance?brand=${encodeURIComponent(state.brand)}`);
   const box = $("#perf");
   if (!box) return;
@@ -1456,19 +1456,67 @@ async function pageWeek() {
   const none = (t) => `<p class="muted small" style="margin:0">${esc(t)}</p>`;
   const posts = (list) => `<div class="table-wrap"><table><thead><tr><th>Post</th><th>Platform</th><th>Goal</th><th>Score</th></tr></thead><tbody>${list.map((p) => `<tr><td><a href="#/videos/${esc(p.job)}">${esc(p.label)}</a>${p.scheduledAt ? `<div class="small muted">${esc(when(p.scheduledAt))}</div>` : ""}</td><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${esc(GOAL_NAMES[p.goal] ?? p.goal)}</td><td><b>${p.score}</b> <span class="small muted">${p.reading === "7d" ? "Final" : "48 hours"}</span></td></tr>`).join("")}</tbody></table></div>`;
   const name = (f) => f.dimension === "slot" ? SLOT_NAMES[f.key] ?? f.key : f.dimension === "platform" ? PLATFORM_NAMES[f.key] ?? f.key : f.key;
+  const decide = state.me.role === "admin" && state.brand !== "*";
   box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${esc(day(d.from))} to ${esc(day(new Date(Date.parse(d.to) - 1)))}. ${d.recipients.length ? `This goes by email every Monday morning to ${esc(d.recipients.join(", "))}.` : "It goes by email every Monday morning."}</p>
   <div class="card"><h2>Platforms</h2>${d.platforms.length ? `<div class="table-wrap"><table><thead><tr><th>Platform</th><th>Posts</th><th>Average views so far</th><th>Before</th><th>New followers</th><th>Reach</th></tr></thead><tbody>${d.platforms.map((p) => `<tr><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${n(p.posts)}</td><td>${n(p.avgViews)}</td><td>${n(p.startViews)}</td><td>${n(p.newFollowers)}</td><td>${n(p.reach)}</td></tr>`).join("")}</tbody></table></div><p class="small muted" style="margin:10px 0 0">Posts, new followers and reach are HighLevel's 7 day numbers. Before is the average from Oct 31.</p>` : none("Nothing posted or read this week.")}</div>
   <div class="card"><h2>Best Posts</h2>${d.best.length ? posts(d.best) : none("No post has a score yet. Scores start 48 hours after a video goes out through Approve and Post.")}${d.worst.length ? `<h3 class="sub">Weakest Posts</h3>${posts(d.worst)}` : ""}</div>
   <div class="card"><h2>Clicks and Leads</h2>${d.links.length ? `<div class="table-wrap"><table><thead><tr><th>Video</th><th>Clicks</th><th>Leads</th></tr></thead><tbody>${d.links.map((l) => `<tr><td><a href="#/videos/${esc(l.job)}">${esc(l.title)}</a></td><td>${n(l.clicks)}</td><td>${n(l.leads)}</td></tr>`).join("")}</tbody></table></div>` : none("No clicks on a tracked link this week.")}</div>
   <div class="card"><h2>Next Week</h2><p style="margin:0">${d.goingOut} ${d.goingOut === 1 ? "post goes" : "posts go"} out, and ${d.finalReads} ${d.finalReads === 1 ? "post gets its" : "posts get their"} final 7 day read.</p></div>
-  <div class="card"><h2>Worth a Look</h2>${d.findings.length ? `<div class="table-wrap"><table><thead><tr><th>What</th><th>Goal</th><th>Posts</th><th>Score</th></tr></thead><tbody>${d.findings.map((f) => `<tr><td>${esc(WEEK_DIMENSIONS[f.dimension])}: ${esc(name(f))}</td><td>${esc(GOAL_NAMES[f.goal] ?? f.goal)}</td><td>${f.posts}</td><td><b>${f.score}</b></td></tr>`).join("")}</tbody></table></div><p class="small muted" style="margin:10px 0 0">These are hunches, not rules. Nothing changes until you approve one for the playbook.</p>` : none("Nothing yet. A finding needs at least 3 posts with a final 7 day score in each group it compares.")}</div>
+  <div class="card"><h2>Worth a Look</h2>${d.findings.length ? `<div class="table-wrap"><table><thead><tr><th>What</th><th>Goal</th><th>Posts</th><th>Score</th>${decide ? "<th></th>" : ""}</tr></thead><tbody>${d.findings.map((f, i) => `<tr><td>${esc(WEEK_DIMENSIONS[f.dimension])}: ${esc(name(f))}</td><td>${esc(GOAL_NAMES[f.goal] ?? f.goal)}</td><td>${f.posts}</td><td><b>${f.score}</b></td>${decide ? `<td style="white-space:nowrap"><button class="btn small" data-approve="${i}">Approve</button> <button class="btn small outline" data-reject="${i}">Reject</button></td>` : ""}</tr>${decide ? `<tr data-form="${i}" hidden><td colspan="5"><div class="field"><label for="rule-${i}">The rule Draft It For Me gets</label><input type="text" id="rule-${i}" data-rule value="${esc(f.rule)}" maxlength="300"><div class="hint">Say it the way you'd tell a new hire. No em dashes.</div></div><div class="field"><label for="note-${i}">Note (optional)</label><input type="text" id="note-${i}" data-note maxlength="300" placeholder="Only for sports teams, say"></div><button class="btn small" data-save="${i}">Save to Playbook</button> <button class="btn small outline" data-cancel="${i}">Cancel</button></td></tr>` : ""}`).join("")}</tbody></table></div><p class="small muted" style="margin:10px 0 0">These are hunches, not rules. ${decide ? "Approve the ones you believe. Approved hooks and formats steer Draft It For Me, and the rest go in the Playbook for whoever schedules posts." : state.me.role === "admin" ? "Pick one brand at the top to approve or reject them." : "An admin approves or rejects each one for the Playbook."}</p>` : none("Nothing yet. A finding needs at least 3 posts with a final 7 day score in each group it compares.")}</div>
+  ${d.playbook.added.length || d.playbook.slipping.length ? `<div class="card"><h2>Playbook</h2>${d.playbook.added.map((x) => `<p style="margin:0 0 8px">Approved this week: ${esc(x.rule)}</p>`).join("")}${d.playbook.slipping.map((x) => `<p style="margin:0 0 8px">No longer holding up: ${esc(x.rule)} <span class="small muted">${x.scoreAt} when approved, ${x.scoreNow} now.</span></p>`).join("")}<p class="small" style="margin:8px 0 0"><a href="#/playbook">Open the Playbook</a></p></div>` : ""}
   ${state.me.role === "admin" && d.recipients.length ? `<p><button class="btn outline" id="send-week">Email It Now</button> <span class="small muted" id="sent-week"></span></p>` : ""}`;
+  const save = async (f, decision, rule, note) => {
+    await api("POST", "/api/playbook", { brand: state.brand, goal: f.goal, dimension: f.dimension, key: f.key, decision, rule, note });
+    await pageWeek();
+  };
+  const formOf = (i) => box.querySelector(`[data-form="${i}"]`);
+  box.querySelectorAll("[data-approve]").forEach((el) => { el.onclick = () => { formOf(el.dataset.approve).hidden = false; }; });
+  box.querySelectorAll("[data-cancel]").forEach((el) => { el.onclick = () => { formOf(el.dataset.cancel).hidden = true; }; });
+  box.querySelectorAll("[data-save]").forEach((el) => {
+    el.onclick = async () => {
+      const form = formOf(el.dataset.save);
+      el.disabled = true;
+      try { await save(d.findings[el.dataset.save], "approve", form.querySelector("[data-rule]").value, form.querySelector("[data-note]").value); }
+      catch (e) { el.disabled = false; alert(e.message); }
+    };
+  });
+  box.querySelectorAll("[data-reject]").forEach((el) => {
+    el.onclick = async () => {
+      if (!confirm("Reject this one? It stops showing here. You can bring it back from the Playbook page.")) return;
+      el.disabled = true;
+      try { await save(d.findings[el.dataset.reject], "reject"); }
+      catch (e) { el.disabled = false; alert(e.message); }
+    };
+  });
   const send = $("#send-week");
   if (send) send.onclick = async () => {
     send.disabled = true;
     try { const r = await api("POST", "/api/performance/weekly/send"); $("#sent-week").textContent = `Sent to ${r.sent.join(", ")}.`; }
     catch (e) { send.disabled = false; alert(e.message); }
   };
+}
+
+// The playbook: findings an admin approved (src/playbook.ts). Hooks and formats steer Draft It For Me.
+async function pagePlaybook() {
+  shell("performance", `<p class="small" style="margin:0 0 16px"><a href="#/performance">← Performance</a></p>${header(brandName(state.brand), "Playbook", "What's working, approved from the weekly findings. Approved hooks and formats steer Draft It For Me for the same goal.")}<div id="playbook"><p class="muted">Loading…</p></div>`);
+  const d = await api("GET", `/api/playbook?brand=${encodeURIComponent(state.brand)}`);
+  const box = $("#playbook");
+  if (!box) return;
+  const what = (r) => `${esc(WEEK_DIMENSIONS[r.dimension] ?? r.dimension)}: ${esc(r.dimension === "slot" ? SLOT_NAMES[r.key] ?? r.key : r.dimension === "platform" ? PLATFORM_NAMES[r.key] ?? r.key : r.key)}`;
+  const steers = (r) => r.dimension === "hook" || r.dimension === "template";
+  const live = d.rules.filter((r) => r.status === "approved");
+  const past = d.rules.filter((r) => r.status !== "approved");
+  const rows = (list, active) => `<div class="table-wrap"><table><thead><tr><th>Rule</th><th>Goal</th><th>Score then</th><th>Now</th><th>Decided</th>${d.canEdit ? "<th></th>" : ""}</tr></thead><tbody>${list.map((r) => `<tr><td>${r.rule ? esc(r.rule) : what(r)}<div class="small muted">${r.rule ? `${what(r)}. ` : ""}${active ? steers(r) ? "Steers Draft It For Me." : "For scheduling." : r.status === "retired" ? "Retired." : "Rejected."}${r.note ? ` ${esc(r.note)}` : ""}</div></td><td>${esc(GOAL_NAMES[r.goal] ?? r.goal)}</td><td>${r.score_at ?? ""}</td><td>${r.now ? `<b>${r.now.score}</b>${r.now.tooFew ? ' <span class="tag">Too few to trust</span>' : ""}` : '<span class="small muted">Not ranked</span>'}</td><td class="small">${esc(r.status === "retired" ? r.retired_by : r.decided_by)}<div class="muted">${esc(when(r.status === "retired" ? r.retired_at : r.decided_at))}</div></td>${d.canEdit ? `<td>${active ? `<button class="btn small outline" data-retire="${esc(r.id)}">Retire</button>` : r.status === "rejected" ? `<button class="btn small outline" data-retire="${esc(r.id)}" data-back>Bring Back</button>` : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+  box.innerHTML = `<div class="card"><h2>In Use</h2>${live.length ? rows(live, true) : `<p class="muted small" style="margin:0">Nothing approved yet. Findings show up under <a href="#/week">This Week</a> once there are enough final 7 day scores to compare.</p>`}</div>
+  ${past.length ? `<div class="card"><h2>Rejected and Retired</h2>${rows(past, false)}</div>` : ""}`;
+  box.querySelectorAll("[data-retire]").forEach((el) => {
+    el.onclick = async () => {
+      if (!confirm(el.dataset.back !== undefined ? "Bring this back? It shows under This Week again while its numbers still stand out." : "Retire this rule? Draft It For Me stops using it.")) return;
+      el.disabled = true;
+      try { await api("POST", `/api/playbook/${el.dataset.retire}/retire`); await pagePlaybook(); }
+      catch (e) { el.disabled = false; alert(e.message); }
+    };
+  });
 }
 
 // ---------- Platform numbers: a video's posts, the YouTube list, and the Connections page ----------
@@ -1564,6 +1612,7 @@ function route() {
   if (parts[0] === "avatar") return pageAvatar().catch(fail);
   if (parts[0] === "youtube") return pageYouTube().catch(fail);
   if (parts[0] === "week") return pageWeek().catch(fail);
+  if (parts[0] === "playbook") return pagePlaybook().catch(fail);
   if (parts[0] === "connections") return pageConnections(params).catch(fail);
   if (parts[0] === "store") return pageStore().catch(fail);
   if (parts[0] === "account") return pageAccount(false);

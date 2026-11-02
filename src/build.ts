@@ -5,6 +5,7 @@
 // writes captions, then renders it.
 import Anthropic from "@anthropic-ai/sdk";
 import { BRAND_VOICE } from "./voice";
+import { playbookPrompt } from "./playbook";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { HttpError, body, json, now, type Env } from "./common";
@@ -269,6 +270,7 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
   const perPage = Math.floor(24_000 / products.length);
   const pages = await Promise.all(products.map((p) => (p.link ? pageText(p.link, perPage).catch(() => null) : Promise.resolve(null))));
   const unread = products.filter((p, i) => p.link && !pages[i]).map((p) => p.name);
+  const playbook = await playbookPrompt(env, brand, goal, f.name);
 
   const prompt = [
     `Write the script for a vertical social video (Reels, TikTok, Shorts) spoken to camera by ${str(b.presenter, 80) || "the presenter"}. It's ${f.brief}.`,
@@ -276,6 +278,7 @@ export async function draftScript(req: Request, env: Env, c: Caller, brand: stri
     BRAND_NOTES[brand] ?? "",
     BRAND_VOICE[brand] ?? "",
     GOAL_NOTES[goal],
+    playbook,
     b.audience ? `Audience: ${str(b.audience, 200)}` : "",
     b.topic ? `What the video is about: ${str(b.topic, 300)}` : "",
     `${f.products.title}:`,

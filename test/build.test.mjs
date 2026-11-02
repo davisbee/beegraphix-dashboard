@@ -452,6 +452,70 @@ test("the weekly report shows this week's scored posts, and only admins can emai
   assert.equal((await call("POST", "/api/performance/weekly/send", T.admin)).status, 503);
 });
 
+/** A finished video posted to Facebook, TikTok and LinkedIn 8 days ago, each with a final 7 day read. */
+async function postedEverywhere(hook, n) {
+  const id = (await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Played ${Date.now()}`, goal: "reach", hookText: hook }) })).data.id;
+  await call("POST", "/api/desktop/claim", T.worker);
+  await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
+  const part = await call("PUT", `/api/desktop/jobs/${id}/upload/part?n=1`, T.worker, null, Buffer.from("fake mp4"));
+  await call("POST", `/api/desktop/jobs/${id}/upload/complete`, T.worker, { parts: [part.data] });
+  await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: `played-${Date.now().toString(36)}`, copy: { page: { title: "T | BeeGraphix", headline: "H", description: "d" }, captions: { facebook: "Hi {url}" } } });
+  assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06", startTime: "14:25" })).status, 202);
+  const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  const key = `play${Date.now().toString(36)}`;
+  const at = new Date(Date.now() - 8 * 86400_000).toISOString();
+  const posted = [["facebook", "reel", "meta"], ["tiktok", "post", "tiktok"], ["linkedin", "post", "highlevel"]];
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: posted.map(([platform, type]) => ({ key: `${key}${platform}:${platform}`, platform, status: "scheduled", scheduleDate: at, id: `g-${key}${platform}`, type, day: 0 })) } });
+  const sent = await call("POST", "/api/desktop/stats", T.worker, { posts: posted.map(([platform, , source]) => ({ source, postId: `p-${key}${platform}`, reading: "7d", brand: "beegraphix", platform, jobId: id, itemKey: `${key}${platform}`, views: n, watchSeconds: n, shares: n, newFollowers: n })) });
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+}
+
+test("findings go in the playbook: approve, reject, retire and bring back", async () => {
+  const strong = `A hook that works ${Date.now()}`;
+  const weak = `A hook that flops ${Date.now()}`;
+  await postedEverywhere(strong, 100000);
+  await postedEverywhere(weak, 0);
+
+  const week = (await call("GET", "/api/performance/weekly?brand=beegraphix", T.admin)).data;
+  const good = week.findings.find((f) => f.key === strong);
+  const bad = week.findings.find((f) => f.key === weak);
+  assert.ok(good && good.score >= 120 && good.posts === 3, JSON.stringify(week.findings));
+  assert.ok(bad && bad.score <= 80);
+  assert.match(good.rule, /work for Reach/, "a suggested rule to start from");
+
+  const finding = (f) => ({ brand: "beegraphix", goal: f.goal, dimension: f.dimension, key: f.key });
+  assert.equal((await call("POST", "/api/playbook", T.bgx, { ...finding(good), decision: "approve" })).status, 403, "admins only");
+  assert.equal((await call("POST", "/api/playbook", T.admin, { ...finding(good), brand: "*", decision: "approve" })).status, 400, "per brand");
+  assert.equal((await call("POST", "/api/playbook", T.admin, { ...finding(good), key: "a hook nobody used", decision: "approve" })).status, 400, "only real findings");
+  assert.equal((await call("POST", "/api/playbook", T.admin, { ...finding(good), decision: "approve", rule: "Open hot — then explain" })).status, 400, "no em dashes");
+  const ok = await call("POST", "/api/playbook", T.admin, { ...finding(good), decision: "approve", rule: "Open on the result, then explain.", note: "Test" });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await call("POST", "/api/playbook", T.admin, { ...finding(bad), decision: "reject" })).status, 200);
+
+  const after = (await call("GET", "/api/performance/weekly?brand=beegraphix", T.admin)).data;
+  assert.ok(!after.findings.some((f) => f.key === strong || f.key === weak), "decided findings stop asking");
+  assert.ok(after.playbook.added.some((x) => x.rule === "Open on the result, then explain."), "approved this week");
+
+  const book = await call("GET", "/api/playbook?brand=beegraphix", T.bgx);
+  assert.equal(book.status, 200);
+  assert.equal(book.data.canEdit, false, "staff can read it, not change it");
+  const rule = book.data.rules.find((r) => r.key === strong);
+  assert.equal(rule.status, "approved");
+  assert.equal(rule.score_at, good.score);
+  assert.equal(rule.now.score, good.score);
+  const rejected = book.data.rules.find((r) => r.key === weak);
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.rule, null);
+  assert.equal((await call("GET", "/api/playbook?brand=beegraphix", T.rugbee)).status, 404, "other brand");
+
+  assert.equal((await call("POST", `/api/playbook/${rule.id}/retire`, T.bgx)).status, 403);
+  assert.equal((await call("POST", `/api/playbook/${rule.id}/retire`, T.admin)).status, 200);
+  assert.equal((await call("POST", `/api/playbook/${rule.id}/retire`, T.admin)).status, 404, "already retired");
+  assert.equal((await call("POST", `/api/playbook/${rejected.id}/retire`, T.admin)).status, 200, "a rejection can be set aside too");
+  const back = (await call("GET", "/api/performance/weekly?brand=beegraphix", T.admin)).data;
+  assert.ok(back.findings.some((f) => f.key === strong) && back.findings.some((f) => f.key === weak), "both can be decided again");
+});
+
 test("a posted Short shows on the YouTube list and its video's page with its numbers", async () => {
   const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Short ${Date.now()}` }) });
   const id = made.data.id;
