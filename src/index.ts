@@ -36,6 +36,13 @@
 //     GET  /api/jobs/:id/video        the finished MP4 (Range requests; ?download for a file)
 //     GET/PUT/POST /api/heygen/...   AI avatar setup, admins only (heygen.ts)
 //     GET/POST /api/users, POST /api/users/:id, POST /api/users/:id/reset   Team page (admins)
+//     GET  /api/connections           Connections page (admins): which platform accounts the dashboard reads (connections.ts)
+//     POST /api/connections/youtube/start?brand=  -> {url}: Google's sign-in; it comes back to GET .../youtube/callback
+//     POST /api/connections/youtube/disconnect?brand=   POST /api/connections/youtube/pull?brand=  (pull the numbers now)
+//     GET  /api/youtube?brand=        every YouTube Short, most viewed first (youtube.ts)
+//     GET  /api/jobs/:id/stats        a video's posts and their numbers, any platform
+//
+//   Cron (wrangler.jsonc, once a day): YouTube numbers for Shorts posted in the last 30 days (youtube.ts)
 //
 //   Desktop (Authorization: Bearer <WORKER_TOKEN>)
 //     POST /api/desktop/claim                     -> oldest queued job, or 204 when there is none
@@ -61,6 +68,8 @@ import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./d
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { putStats } from "./tracking";
 import { getPerformance, linkEvent, markBoosted, statsDue } from "./performance";
+import { connectionBrand, disconnectYouTube, listConnections, requireAdmin, startYouTube, youtubeCallback } from "./connections";
+import { jobStats, pullAllYouTube, pullNow, youtubeList } from "./youtube";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
 import { desktopCan, desktopClipStatus, heygenRoute, saveDesktopFeatures, startClips } from "./heygen";
 import { desktopVoice, speakLines, voicesRoute } from "./voiceover";
@@ -465,6 +474,9 @@ async function route(req: Request, env: Env): Promise<Response> {
   // The landing pages report visits and quote requests; they have no login to send.
   if (p === "/api/t" && m === "POST") return linkEvent(req, env);
 
+  // Google sends the admin back here from its sign-in page; it checks the session itself and ends on a redirect.
+  if (p === "/api/connections/youtube/callback" && m === "GET") return youtubeCallback(req, url, env);
+
   // Signing in, and a person's own account (allowed while they still have a temporary password).
   if (p === "/api/login" && m === "POST") return login(req, env);
   if (p === "/api/logout" && m === "POST") return logout(req, env);
@@ -487,6 +499,11 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
   if (p === "/api/performance" && m === "GET") return getPerformance(env, c, url);
   if (p === "/api/performance/boosted" && m === "POST") return markBoosted(req, env, c);
+  if (p === "/api/youtube" && m === "GET") return youtubeList(env, c, url);
+  if (p === "/api/connections" && m === "GET") return listConnections(env, c);
+  if (p === "/api/connections/youtube/start" && m === "POST") return startYouTube(url, env, c);
+  if (p === "/api/connections/youtube/disconnect" && m === "POST") return disconnectYouTube(url, env, c);
+  if (p === "/api/connections/youtube/pull" && m === "POST") { requireAdmin(c); return pullNow(env, connectionBrand(c, url.searchParams.get("brand"))); }
   if (p === "/api/features" && m === "GET") return json({ showcase: await desktopCan(env, "showcase"), voiceover: await desktopCan(env, "voiceover"), broll: await desktopCan(env, "broll"), storead: await desktopCan(env, "storead") });
 
   if (p === "/api/users" && m === "GET") return listUsers(env, c);
@@ -522,9 +539,10 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (pm && pm[2] === "approve" && m === "POST") return approvePost(req, env, c, pm[1]);
   const sm = p.match(/^\/api\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
   if (sm && m === "GET") return getStill(env, c, sm[1], sm[2]);
-  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video|images))?$/);
+  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video|images|stats))?$/);
   if (s) {
     const [, id, action] = s;
+    if (action === "stats" && m === "GET") { await visibleJob(env, c.brand, id); return jobStats(env, id); }
     if (!action && m === "GET") {
       const j = await visibleJob(env, c.brand, id);
       const hasImages = j.status === "done" ? Boolean(await env.MEDIA.head(imagesKey(j))) : false;
@@ -546,5 +564,8 @@ export default {
       console.error(e);
       return json({ error: "Server error" }, 500);
     }
+  },
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(pullAllYouTube(env).then((r) => console.log("youtube pull", JSON.stringify(r))));
   },
 } satisfies ExportedHandler<Env>;
