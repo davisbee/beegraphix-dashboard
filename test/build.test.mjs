@@ -368,15 +368,19 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
   const old = new Date(Date.now() - 8 * 86400_000).toISOString();
   const key = `reel${Date.now().toString(36)}`;
-  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:facebook`, platform: "facebook", status: "scheduled", scheduleDate: old, id: "g1", type: "reel", day: 0 }] } });
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:facebook`, platform: "facebook", status: "scheduled", scheduleDate: old, id: "g1", type: "reel", day: 0 }, { key: `${key}t:tiktok`, platform: "tiktok", status: "scheduled", scheduleDate: old, id: "g2", type: "post", day: 0 }, { key: `${key}l:linkedin`, platform: "linkedin", status: "scheduled", scheduleDate: old, id: "g3", type: "post", day: 0 }] } });
 
-  const due = (await call("GET", "/api/desktop/stats/due", T.worker)).data.due.find((x) => x.jobId === id);
+  const dueNow = (await call("GET", "/api/desktop/stats/due", T.worker)).data.due.filter((x) => x.jobId === id);
+  assert.deepEqual(dueNow.map((x) => x.platform).sort(), ["facebook", "tiktok"], "TikTok's video is due though it's saved as a post; LinkedIn's post isn't");
+  const due = dueNow.find((x) => x.platform === "facebook");
   assert.equal(due.reading, "7d");
   assert.equal(due.itemKey, key);
   assert.equal((await call("GET", "/api/desktop/stats/due", T.bgx)).status, 401, "desktop only");
 
   const sent = await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "meta", postId: `v-${key}`, reading: "7d", brand: "beegraphix", platform: "facebook", jobId: id, itemKey: key, views: 500, watchSeconds: 7200, shares: 9, newFollowers: 2 }] });
   assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  const sentTikTok = await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "tiktok", postId: `t-${key}`, reading: "7d", brand: "beegraphix", platform: "tiktok", jobId: id, itemKey: `${key}t`, views: 80, shares: 1, comments: 2 }] });
+  assert.equal(sentTikTok.status, 200, JSON.stringify(sentTikTok.data));
   assert.ok(!(await call("GET", "/api/desktop/stats/due", T.worker)).data.due.some((x) => x.jobId === id), "not due once it's read");
 
   // The landing page's count: known links only, and no sign-in.
@@ -400,8 +404,9 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   const mark = { job: id, platform: "facebook", itemKey: key, boosted: true };
   assert.equal((await call("POST", "/api/performance/boosted", T.bgx, mark)).status, 403, "admins only");
   assert.equal((await call("POST", "/api/performance/boosted", T.admin, mark)).status, 200);
+  assert.equal((await call("POST", "/api/performance/boosted", T.admin, { ...mark, platform: "tiktok", itemKey: `${key}t` })).status, 200);
   const paid = (await call("GET", "/api/performance?brand=beegraphix", T.bgx)).data;
-  assert.equal(paid.posts.find((p) => p.job === id).score, null);
+  assert.ok(paid.posts.filter((p) => p.job === id).every((p) => p.score === null));
   assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === "A hook worth scoring"), "paid posts leave the rankings");
 });
 
