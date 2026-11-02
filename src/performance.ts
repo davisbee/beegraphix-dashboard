@@ -153,13 +153,13 @@ export async function linkEvent(req: Request, env: Env) {
   return new Response(null, { status: 204 });
 }
 
-/** GET /api/desktop/stats/due: videos whose 48 hour or 7 day read hasn't come in. After 30 days it stops asking. TikTok's video is saved as a post, not a reel. */
+/** GET /api/desktop/stats/due: posts whose 48 hour or 7 day read hasn't come in. After 30 days it stops asking. TikTok's video and LinkedIn's images are saved as posts, not reels. */
 export async function statsDue(env: Env) {
   const rows = await env.DB.prepare(
     `SELECT f.job_id, f.platform, f.item_key, f.brand, f.scheduled_at, f.ghl_post_id,
        EXISTS (SELECT 1 FROM post_stats s WHERE s.job_id = f.job_id AND s.platform = f.platform AND s.item_key = f.item_key AND s.reading = '48h') AS has48,
        EXISTS (SELECT 1 FROM post_stats s WHERE s.job_id = f.job_id AND s.platform = f.platform AND s.item_key = f.item_key AND s.reading = '7d') AS has7
-     FROM post_features f WHERE ((f.post_type = 'reel' AND f.platform IN ('facebook', 'instagram')) OR f.platform = 'tiktok') AND f.scheduled_at IS NOT NULL`,
+     FROM post_features f WHERE ((f.post_type = 'reel' AND f.platform IN ('facebook', 'instagram')) OR f.platform IN ('tiktok', 'linkedin')) AND f.scheduled_at IS NOT NULL`,
   ).all<{ job_id: string; platform: string; item_key: string; brand: string; scheduled_at: string; ghl_post_id: string | null; has48: number; has7: number }>();
   const at = Date.now();
   const due = rows.results.flatMap((r) => {
