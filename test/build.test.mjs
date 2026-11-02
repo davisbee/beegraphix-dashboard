@@ -371,7 +371,8 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:facebook`, platform: "facebook", status: "scheduled", scheduleDate: old, id: "g1", type: "reel", day: 0 }, { key: `${key}t:tiktok`, platform: "tiktok", status: "scheduled", scheduleDate: old, id: "g2", type: "post", day: 0 }, { key: `${key}l:linkedin`, platform: "linkedin", status: "scheduled", scheduleDate: old, id: "g3", type: "post", day: 0 }] } });
 
   const dueNow = (await call("GET", "/api/desktop/stats/due", T.worker)).data.due.filter((x) => x.jobId === id);
-  assert.deepEqual(dueNow.map((x) => x.platform).sort(), ["facebook", "tiktok"], "TikTok's video is due though it's saved as a post; LinkedIn's post isn't");
+  assert.deepEqual(dueNow.map((x) => x.platform).sort(), ["facebook", "linkedin", "tiktok"], "TikTok's video and LinkedIn's post are due though they're saved as posts");
+  assert.equal(dueNow.find((x) => x.platform === "linkedin").ghlPostId, "g3", "LinkedIn is read through its HighLevel post");
   const due = dueNow.find((x) => x.platform === "facebook");
   assert.equal(due.reading, "7d");
   assert.equal(due.itemKey, key);
@@ -381,6 +382,8 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   assert.equal(sent.status, 200, JSON.stringify(sent.data));
   const sentTikTok = await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "tiktok", postId: `t-${key}`, reading: "7d", brand: "beegraphix", platform: "tiktok", jobId: id, itemKey: `${key}t`, views: 80, shares: 1, comments: 2 }] });
   assert.equal(sentTikTok.status, 200, JSON.stringify(sentTikTok.data));
+  const sentLinkedIn = await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "highlevel", postId: "g3", reading: "7d", brand: "beegraphix", platform: "linkedin", jobId: id, itemKey: `${key}l`, shares: 1, comments: 2 }] });
+  assert.equal(sentLinkedIn.status, 200, JSON.stringify(sentLinkedIn.data));
   assert.ok(!(await call("GET", "/api/desktop/stats/due", T.worker)).data.due.some((x) => x.jobId === id), "not due once it's read");
 
   // The landing page's count: known links only, and no sign-in.
