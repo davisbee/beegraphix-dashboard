@@ -16,6 +16,7 @@ export interface Env {
   RESEND_API_KEY?: string; // Resend, for "Forgot your password?" emails. Without it the request goes to the Team page.
   EMAIL_FROM?: string; // sender for those emails; default "Content Factory <noreply@shopbgx.com>"
   RESEND_BASE_URL?: string; // tests only: a stand-in for Resend
+  WEEKLY_REPORT_TO?: string; // who gets the Monday weekly report email, comma-separated (weekly.ts)
   HEYGEN_API_KEY?: string; // HeyGen, for the AI avatar (heygen.ts)
   HEYGEN_BASE_URL?: string; // tests only: a stand-in for HeyGen
   ELEVENLABS_API_KEY?: string; // ElevenLabs, for faceless voiceovers (voiceover.ts)

@@ -109,6 +109,17 @@ are live from the YouTube Data API. Watch time, average view duration, shares an
 from YouTube Analytics, which runs 2 to 3 days behind. **Pull Now** on the Connections page runs it
 straight away. Each video's page shows its numbers, and Performance links to every Short ranked by views.
 
+## Weekly report
+
+Performance's **This Week** page (`#/week`, `src/weekly.ts`) shows the last 7 days for the brand picked: each
+platform against its Oct 31 starting point (HighLevel's 7 day posts, new followers and reach, plus average views
+read so far), the best and weakest scored posts from the last 2 weeks, clicks and leads on tracked links, what's
+coming next week, and findings worth a look. A finding is a template, hook, time, day or platform that scored 120
+or more, or 80 or less, with at least 3 final 7 day reads. Findings are only suggestions for the playbook.
+
+Every Monday, right after the YouTube pull, the cron emails the BeeGraphix report through Resend to the people in
+`WEEKLY_REPORT_TO` (`wrangler.jsonc` vars). An admin can also send it straight away with **Email It Now**.
+
 ## Cloudflare resources
 
 - Worker `content-factory-dashboard` (the screens are the static files in `public/`)

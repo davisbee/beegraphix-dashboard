@@ -68,6 +68,7 @@ import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from "./d
 import { approvePost, draftPost, getPost, getStill, previewPost, putPost, putStill, taskFinished } from "./posts";
 import { putStats } from "./tracking";
 import { getPerformance, linkEvent, markBoosted, statsDue } from "./performance";
+import { getWeekly, sendWeekly, sendWeeklyNow } from "./weekly";
 import { connectionBrand, disconnectYouTube, listConnections, requireAdmin, startYouTube, youtubeCallback } from "./connections";
 import { jobStats, pullAllYouTube, pullNow, youtubeList } from "./youtube";
 import { lookupImage, lookupProduct, lookupStyle } from "./lookup";
@@ -499,6 +500,8 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (p === "/api/catalog" && m === "GET") return getCatalog(env, c);
   if (p === "/api/performance" && m === "GET") return getPerformance(env, c, url);
   if (p === "/api/performance/boosted" && m === "POST") return markBoosted(req, env, c);
+  if (p === "/api/performance/weekly" && m === "GET") return getWeekly(env, c, url);
+  if (p === "/api/performance/weekly/send" && m === "POST") return sendWeeklyNow(env, c);
   if (p === "/api/youtube" && m === "GET") return youtubeList(env, c, url);
   if (p === "/api/connections" && m === "GET") return listConnections(env, c);
   if (p === "/api/connections/youtube/start" && m === "POST") return startYouTube(url, env, c);
@@ -565,7 +568,11 @@ export default {
       return json({ error: "Server error" }, 500);
     }
   },
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(pullAllYouTube(env).then((r) => console.log("youtube pull", JSON.stringify(r))));
+  async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil((async () => {
+      await pullAllYouTube(env).then((r) => console.log("youtube pull", JSON.stringify(r))).catch((e) => console.error("youtube pull", e));
+      // Mondays, after the pull so YouTube's numbers are fresh.
+      if (new Date(event.scheduledTime).getUTCDay() === 1) await sendWeekly(env).then((to) => console.log("weekly report sent to", to.join(", "))).catch((e) => console.error("weekly report", e));
+    })());
   },
 } satisfies ExportedHandler<Env>;
