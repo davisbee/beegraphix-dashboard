@@ -23,6 +23,16 @@ export interface Env {
   ELEVENLABS_BASE_URL?: string; // tests only: a stand-in for ElevenLabs
   INKSOFT_BASE_URL?: string; // tests only: a stand-in for stores.inksoft.com
   CHIPPLY_BASE_URL?: string; // tests only: a stand-in for <dealer>.chipply.com
+  GOOGLE_CLIENT_ID?: string; // Google Cloud "BeeGraphix Content Factory" web client, for Connect YouTube (connections.ts)
+  GOOGLE_CLIENT_SECRET?: string;
+  CONNECTIONS_KEY?: string; // 32 random bytes, base64: encrypts the connected accounts' logins in D1
+  GHL_TOKEN?: string; // optional: HighLevel, to find each Short's YouTube video from the published post (youtube.ts)
+  GHL_LOCATION_ID?: string;
+  GOOGLE_ACCOUNTS_URL?: string; // tests only: stand-ins for Google
+  GOOGLE_OAUTH_URL?: string;
+  YOUTUBE_API_URL?: string;
+  YOUTUBE_ANALYTICS_URL?: string;
+  GHL_API_URL?: string; // tests only: a stand-in for HighLevel
 }
 
 export const BRANDS = ["beegraphix", "rugbee"] as const;

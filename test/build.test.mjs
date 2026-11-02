@@ -417,6 +417,52 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === hook), "paid posts leave the rankings");
 });
 
+test("a posted Short shows on the YouTube list and its video's page with its numbers", async () => {
+  const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Short ${Date.now()}` }) });
+  const id = made.data.id;
+  await call("POST", "/api/desktop/claim", T.worker);
+  await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
+  const part = await call("PUT", `/api/desktop/jobs/${id}/upload/part?n=1`, T.worker, null, Buffer.from("fake mp4"));
+  await call("POST", `/api/desktop/jobs/${id}/upload/complete`, T.worker, { parts: [part.data] });
+  const title = `Short title ${Date.now()}`;
+  await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: `short-${Date.now().toString(36)}`, copy: { page: { title: "T | BeeGraphix", headline: "H", description: "d" }, captions: { youtubeTitle: title, youtube: "Hi {url}" } } });
+  assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06", startTime: "11:30" })).status, 202);
+  const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  const key = `yt${Date.now().toString(36)}`;
+  const old = new Date(Date.now() - 3 * 86400_000).toISOString();
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:youtube`, platform: "youtube", status: "scheduled", scheduleDate: old, id: "ghl-yt", type: "post", day: 0 }] } });
+  assert.ok(!(await call("GET", "/api/desktop/stats/due", T.worker)).data.due.some((x) => x.jobId === id), "the dashboard reads YouTube itself, not the desktop");
+
+  const before = (await call("GET", "/api/youtube?brand=beegraphix", T.bgx)).data.shorts.find((s) => s.job === id);
+  assert.equal(before.title, title, "titled with the YouTube title it was posted with");
+  assert.equal(before.now, null);
+  assert.equal((await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "youtube", postId: `v-${key}`, reading: "48h", brand: "beegraphix", platform: "youtube", jobId: id, itemKey: key, views: 1234567, watchSeconds: 600 }] })).status, 200);
+  const list = (await call("GET", "/api/youtube?brand=beegraphix", T.bgx)).data;
+  assert.equal(list.shorts[0].job, id, "most viewed first");
+  assert.equal(list.shorts[0].now.views, 1234567);
+  const page = (await call("GET", `/api/jobs/${id}/stats`, T.bgx)).data.posts.find((p) => p.platform === "youtube");
+  assert.equal(page.now.reading, "48h");
+  assert.equal(page.at48h.watchSeconds, 600);
+  assert.equal((await call("GET", `/api/jobs/${id}/stats`, T.rugbee)).status, 404, "other brand");
+  assert.equal((await call("GET", "/api/youtube?brand=beegraphix", T.rugbee)).status, 404, "other brand");
+});
+
+test("connecting YouTube is for admins and needs its secrets", async () => {
+  assert.equal((await call("GET", "/api/connections")).status, 401);
+  assert.equal((await call("GET", "/api/connections", T.bgx)).status, 403);
+  const r = await call("GET", "/api/connections", T.admin);
+  assert.equal(r.status, 200);
+  assert.ok(r.data.missing.includes("GOOGLE_CLIENT_ID"), ".dev.vars has no Google client");
+  assert.equal((await call("POST", "/api/connections/youtube/start?brand=beegraphix", T.bgx)).status, 403);
+  assert.equal((await call("POST", "/api/connections/youtube/start?brand=beegraphix", T.admin)).status, 503);
+  assert.equal((await call("POST", "/api/connections/youtube/pull?brand=beegraphix", T.bgx)).status, 403);
+  assert.equal((await call("POST", "/api/connections/youtube/pull?brand=beegraphix", T.admin)).status, 404, "nothing connected");
+  assert.equal((await call("POST", "/api/connections/youtube/disconnect?brand=beegraphix", T.admin)).status, 404);
+  const back = await fetch(`${BASE}/api/connections/youtube/callback?state=made-up&code=x`, { redirect: "manual" });
+  assert.equal(back.status, 302);
+  assert.match(back.headers.get("location"), /#\/connections\?error=/, "an unknown sign-in goes back to the page with a message");
+});
+
 test("a snapshot keeps its first numbers and only fills blanks", async () => {
   const asOf = "2098-02-03";
   const row = { brand: "beegraphix", platform: "tiktok", asOf, source: "manual", followers: 10 };

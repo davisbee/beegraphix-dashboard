@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/performance, #/new, #/store, #/render, #/team, #/avatar, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/performance, #/youtube, #/new, #/store, #/render, #/team, #/avatar, #/connections, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -122,6 +122,7 @@ function shell(page, inner) {
           <div class="menu-pop right">
             <div class="menu-who"><b>${esc(state.me.name)}</b><span>${esc(brandName(state.brand))}</span></div>
             <a href="#/account" ${page === "account" ? 'aria-current="page"' : ""}>Account</a>
+            ${admin ? `<a href="#/connections" ${page === "connections" ? 'aria-current="page"' : ""}>Connections</a>` : ""}
             <button type="button" id="signout">Sign out</button>
           </div>
         </details>
@@ -522,7 +523,7 @@ async function pageVideo(id) {
           </div>
           ${storeAd ? `<div class="card"><h2>For the store owner</h2><p class="muted small" style="margin:0 0 12px">Download the video and send it with this caption. They post it themselves.</p>
             <p style="margin:0">${esc(j.payload.spec.caption ?? "")}</p><p class="small muted" style="margin:12px 0 0"><a href="${esc(j.payload.spec.storeUrl)}" target="_blank" rel="noopener">Open the store</a></p></div>` : ""}
-          ${j.status === "done" && !storeAd ? `<div id="posting"></div>` : ""}
+          ${j.status === "done" && !storeAd ? `<div id="numbers"></div><div id="posting"></div>` : ""}
         </div>
       </div>`;
     if (player === null) {
@@ -537,6 +538,7 @@ async function pageVideo(id) {
     const cc = $("#copyCaption");
     if (cc) cc.onclick = () => copyScript(cc, j.payload.spec.caption);
     if (cancel) cancel.onclick = async () => { cancel.disabled = true; await api("POST", `/api/jobs/${j.id}/cancel`).catch((e) => alert(e.message)); refresh(); };
+    if ($("#numbers")) showNumbers(j).catch(() => {});
     if ($("#posting")) showPosting(j).catch((e) => { const b = $("#posting"); if (b) b.innerHTML = `<div class="card"><h2>Page and posts</h2><p class="bad">${esc(e.message)}</p></div>`; });
     stopTimer();
     if (ACTIVE.includes(j.status)) state.timer = setTimeout(() => refresh().catch(() => {}), 4000);
@@ -1417,7 +1419,7 @@ const perfLabel = (dim, key) => dim === "slot" ? SLOT_NAMES[key] ?? key : dim ==
 const perfValue = (m, v) => v === null || v === undefined ? "No data yet" : m === "watchSeconds" ? `${(v / 3600).toFixed(1)} hours` : Number(v).toLocaleString();
 
 async function pagePerformance() {
-  shell("performance", `<h1 class="title">Performance</h1><p class="muted" style="margin:0 0 20px">How each video did against the goal it was made for. A score of 100 is a typical post for its goal.</p><div id="perf"><p class="muted">Loading…</p></div>`);
+  shell("performance", `${header("", "Performance", "How each video did against the goal it was made for. A score of 100 is a typical post for its goal.", `<a class="btn outline" href="#/youtube">YouTube Shorts by Views</a>`)}<div id="perf"><p class="muted">Loading…</p></div>`);
   const d = await api("GET", `/api/performance?brand=${encodeURIComponent(state.brand)}`);
   const box = $("#perf");
   if (!box) return;
@@ -1431,7 +1433,7 @@ async function pagePerformance() {
   const list = !scored.length ? `<p class="muted small" style="margin:0">Posts show up here 48 hours after they go out.</p>` : `<div class="table-wrap"><table><thead><tr><th>Post</th><th>Platform</th><th>Goal</th><th>Read</th><th>Score</th>${d.canMark ? "<th>Boosted</th>" : ""}</tr></thead><tbody>
     ${scored.map((p) => `<tr data-job="${esc(p.job)}" data-platform="${esc(p.platform)}" data-key="${esc(p.itemKey)}"><td><a href="#/videos/${esc(p.job)}">${esc(p.hook || p.campaign)}</a><div class="small muted">${esc(p.itemKey)}${p.scheduledAt ? `, ${esc(when(p.scheduledAt))}` : ""}</div></td><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${esc(GOAL_NAMES[p.goal] ?? p.goal)}</td><td>${esc(p.reading === "7d" ? "Final" : p.reading === "48h" ? "48 hours" : "")}</td><td><b>${p.boosted ? "Paid" : p.score ?? ""}</b></td>${d.canMark ? `<td><input type="checkbox" aria-label="This post was boosted" data-boost ${p.boosted ? "checked" : ""}></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
   const start = d.baseline.length ? `<div class="card"><h2>Where we started</h2><div class="table-wrap"><table><thead><tr><th>Platform</th><th>Followers</th><th>Average views</th><th>As of</th></tr></thead><tbody>${d.baseline.map((b) => `<tr><td>${esc(PLATFORM_NAMES[b.platform] ?? b.platform)}</td><td>${b.followers === null ? "" : Number(b.followers).toLocaleString()}</td><td>${b.avg_views === null ? "" : Math.round(b.avg_views).toLocaleString()}</td><td>${esc(b.as_of)}</td></tr>`).join("")}</tbody></table></div></div>` : "";
-  box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${d.lastPull ? `Numbers last pulled ${esc(ago(d.lastPull))}.` : "No numbers pulled from the platforms yet."} Facebook and Instagram reels have full numbers so far. TikTok has views, shares and comments, but doesn't share watch time. LinkedIn has shares and comments, with no views yet. Rankings use final 7 day scores and leave out paid posts.</p>${cards}<div class="card"><h2>Posts</h2>${list}</div>${start}`;
+  box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${d.lastPull ? `Numbers last pulled ${esc(ago(d.lastPull))}.` : "No numbers pulled from the platforms yet."} Facebook and Instagram reels have full numbers so far. TikTok has views, shares and comments, but doesn't share watch time. LinkedIn has shares and comments, with no views yet. YouTube Shorts are read by the dashboard each morning once YouTube is connected. Rankings use final 7 day scores and leave out paid posts.</p>${cards}<div class="card"><h2>Posts</h2>${list}</div>${start}`;
   box.querySelectorAll("[data-boost]").forEach((el) => {
     el.onchange = async () => {
       const row = el.closest("tr");
@@ -1440,6 +1442,83 @@ async function pagePerformance() {
       catch (e) { el.checked = !el.checked; el.disabled = false; alert(e.message); }
     };
   });
+}
+
+// ---------- Platform numbers: a video's posts, the YouTube list, and the Connections page ----------
+
+const count = (v) => (v === null || v === undefined ? "–" : Number(v).toLocaleString());
+const minutes = (s) => (s === null || s === undefined ? "–" : Math.round(s / 60).toLocaleString());
+const clock = (s) => (s === null || s === undefined ? "–" : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`);
+const READING_NAMES = { latest: "Today", "7d": "7 days", "48h": "48 hours", backfill: "Earlier" };
+const ANALYTICS_LAG = "Watch time, average view, shares and subscribers come from YouTube Analytics, which runs 2 to 3 days behind Studio.";
+
+/** On a video's page: each post that has a link or numbers. Shows nothing until something does. */
+async function showNumbers(j) {
+  const box = $("#numbers");
+  const d = await api("GET", `/api/jobs/${j.id}/stats`);
+  const posts = d.posts.filter((p) => p.url || p.now);
+  if (!box || !posts.length) return;
+  const row = (label, n) => !n ? "" : `<tr><td class="small muted">${esc(label)}</td><td>${count(n.views)}</td><td>${minutes(n.watchSeconds)}</td><td>${clock(n.avgViewSeconds)}</td><td>${count(n.likes)}</td><td>${count(n.comments)}</td><td>${count(n.shares)}</td><td>${count(n.newFollowers)}</td></tr>`;
+  box.innerHTML = `<div class="card"><h2>How it's doing</h2>
+    ${posts.map((p) => `<h3 class="sub">${esc(PLATFORM_NAMES[p.platform] ?? p.platform)} <span class="small muted">${esc(p.itemKey)}${p.scheduledAt ? `, ${esc(when(p.scheduledAt))}` : ""}</span>${p.url ? ` <a class="small" href="${esc(p.url)}" target="_blank" rel="noopener">Open</a>` : ""}</h3>
+      ${p.now ? `<div class="table-wrap"><table><thead><tr><th>Read</th><th>Views</th><th>Watch min</th><th>Avg view</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Subs / follows</th></tr></thead><tbody>
+        ${row(`${READING_NAMES[p.now.reading] ?? p.now.reading} (${ago(p.now.readAt)})`, p.now)}${p.now.reading !== "48h" ? row("48 hours", p.at48h) : ""}${p.now.reading !== "7d" ? row("7 days", p.at7d) : ""}
+      </tbody></table></div>` : `<p class="muted small" style="margin:0">Numbers come in with the next daily pull.</p>`}`).join("")}
+    ${posts.some((p) => p.platform === "youtube") ? `<p class="small muted" style="margin:12px 0 0">${ANALYTICS_LAG}</p>` : ""}</div>`;
+}
+
+async function pageYouTube() {
+  shell("performance", `<p class="small" style="margin:0 0 16px"><a href="#/performance">← Performance</a></p>${header(brandName(state.brand), "YouTube", "Every Short the Content Factory posted, most viewed first.")}<div id="yt"><p class="muted">Loading…</p></div>`);
+  const d = await api("GET", `/api/youtube?brand=${encodeURIComponent(state.brand)}`);
+  const box = $("#yt");
+  if (!box) return;
+  const ch = d.channels[0];
+  const status = !ch ? `YouTube isn't connected yet${state.me.role === "admin" ? `. <a href="#/connections">Connect it</a>` : ". An admin connects it on the Connections page"}.`
+    : `Read from ${esc(ch.account_name)}${ch.last_pull_at ? `, last pulled ${esc(ago(ch.last_pull_at))}` : ", not pulled yet"}.${ch.last_error ? ` <span class="bad">${esc(ch.last_error)}</span>` : ""}`;
+  box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${status} ${ANALYTICS_LAG}</p>
+    <div class="card">${!d.shorts.length ? `<p class="muted small" style="margin:0">No Shorts posted yet.</p>` : `<div class="table-wrap"><table><thead><tr><th>#</th><th>Short</th><th>Views</th><th>Watch min</th><th>Avg view</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Subs</th></tr></thead><tbody>
+      ${d.shorts.map((s, i) => `<tr><td class="muted">${s.now ? i + 1 : ""}</td><td><a href="#/videos/${esc(s.job)}">${esc(s.title)}</a><div class="small muted">${esc(when(s.scheduledAt))}${s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">Watch on YouTube</a>` : " · not found on YouTube yet"}</div></td>
+        <td><b>${count(s.now?.views)}</b></td><td>${minutes(s.now?.watchSeconds)}</td><td>${clock(s.now?.avgViewSeconds)}</td><td>${count(s.now?.likes)}</td><td>${count(s.now?.comments)}</td><td>${count(s.now?.shares)}</td><td>${count(s.now?.newFollowers)}</td></tr>`).join("")}
+    </tbody></table></div>`}</div>`;
+}
+
+async function pageConnections(params) {
+  if (state.me.role !== "admin") { location.hash = "#/videos"; return; }
+  shell("connections", `${header(brandName(state.brand), "Connections", "Accounts the dashboard reads numbers from by itself. Read-only: it can't post, edit or delete anything.")}<div id="conn"><p class="muted">Loading…</p></div>`);
+  const flash = params.get("connected") ? `<div class="notice">Connected ${esc(params.get("channel") ?? "YouTube")}. Numbers come in with the first pull; press Pull Now to get them straight away.</div>`
+    : params.get("error") ? `<div class="error">${esc(params.get("error"))}</div>` : "";
+  if (params.toString()) history.replaceState(null, "", "#/connections");
+  const d = await api("GET", "/api/connections");
+  const box = $("#conn");
+  if (!box) return;
+  const yt = d.connections.find((c) => c.platform === "youtube" && c.brand === state.brand);
+  const q = `?brand=${encodeURIComponent(state.brand)}`;
+  box.innerHTML = `${flash}<div class="card"><h2>YouTube</h2>
+    ${d.missing.length ? `<p class="bad small">Before this can connect, set these Worker secrets: ${esc(d.missing.join(", "))}.</p>` : ""}
+    ${yt ? `<dl class="facts"><dt>Channel</dt><dd><b>${esc(yt.accountName)}</b> <span class="small muted">${esc(yt.accountId)}</span></dd><dt>Connected by</dt><dd>${esc(yt.connectedBy)}, ${esc(when(yt.connectedAt))}</dd>
+        <dt>Last pull</dt><dd>${yt.lastPullAt ? esc(ago(yt.lastPullAt)) : "Not yet"}${yt.lastError ? `<div class="bad small">${esc(yt.lastError)}</div>` : ""}</dd></dl>
+        <div class="row" style="margin-top:20px"><button class="btn" type="button" id="ytPull">Pull Now</button><button class="btn outline" type="button" id="ytConnect">Connect a Different Channel</button><button class="linkbtn dark" type="button" id="ytOff">Disconnect</button></div><div id="ytOut"></div>`
+      : `<p class="muted small" style="margin:0 0 16px">Sign in with the Google account that manages the ${esc(brandName(state.brand))} channel. Google asks to let the Content Factory see the channel and its analytics; that's all it gets.</p>
+        <button class="btn" type="button" id="ytConnect" ${d.missing.length ? "disabled" : ""}>Connect YouTube</button>`}
+  </div>`;
+  $("#ytConnect").onclick = async (e) => {
+    e.target.disabled = true;
+    try { location.href = (await api("POST", `/api/connections/youtube/start${q}`)).url; } catch (err) { e.target.disabled = false; alert(err.message); }
+  };
+  if ($("#ytPull")) $("#ytPull").onclick = async (e) => {
+    e.target.disabled = true;
+    $("#ytOut").innerHTML = `<p class="muted small">Pulling…</p>`;
+    try {
+      const r = await api("POST", `/api/connections/youtube/pull${q}`);
+      $("#ytOut").innerHTML = `<div class="notice" style="margin-top:16px">${r.posts} Shorts from the last 30 days. ${r.matched ? `Found ${r.matched} on YouTube just now. ` : ""}Read ${r.read}.
+        ${r.unmatched.length ? `<div class="small">Not found yet: ${esc(r.unmatched.join("; "))}</div>` : ""}${r.problems.length ? `<div class="bad small">${esc(r.problems.join(" "))}</div>` : ""}</div>`;
+    } catch (err) { $("#ytOut").innerHTML = `<div class="error" style="margin-top:16px">${esc(err.message)}</div>`; }
+    e.target.disabled = false;
+  };
+  if ($("#ytOff")) $("#ytOff").onclick = async () => {
+    if (!confirm("Disconnect YouTube? The numbers already pulled stay; new ones stop until it's connected again.")) return;
+    try { await api("POST", `/api/connections/youtube/disconnect${q}`); pageConnections(new URLSearchParams()); } catch (err) { alert(err.message); }
+  };
 }
 
 function route() {
@@ -1456,6 +1535,8 @@ function route() {
   if (parts[0] === "performance") return pagePerformance().catch(fail);
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "avatar") return pageAvatar().catch(fail);
+  if (parts[0] === "youtube") return pageYouTube().catch(fail);
+  if (parts[0] === "connections") return pageConnections(params).catch(fail);
   if (parts[0] === "store") return pageStore().catch(fail);
   if (parts[0] === "account") return pageAccount(false);
   return pageVideos().catch(fail);

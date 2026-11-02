@@ -84,6 +84,27 @@ and Secrets), never in git:
   `{"<token>": "beegraphix", "<token>": "rugbee", "<token>": "*"}`. `*` sees every brand.
 - `ANTHROPIC_API_KEY` (optional): the Claude API key for "Draft it for me". Without it the button says
   it isn't switched on yet and staff write the script themselves.
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`: the web OAuth client in the Google Cloud project
+  "BeeGraphix Content Factory", for **Connect YouTube**. Its redirect URL is
+  `https://contentfactory.shopbgx.com/api/connections/youtube/callback`.
+- `CONNECTIONS_KEY`: 32 random bytes, base64. It encrypts the connected accounts' logins in D1. Make one
+  without it ever showing on screen:
+  `node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64'))" | npx wrangler secret put CONNECTIONS_KEY`.
+  Changing it means connecting YouTube again.
+- `GHL_TOKEN`, `GHL_LOCATION_ID` (optional): the same HighLevel values as the Content Factory `.env`. With
+  them, each Short's YouTube video is found from HighLevel's published post. Without them it's matched to
+  the channel's uploads by publish time and title.
+
+## YouTube numbers
+
+An admin connects the channel once under the account menu's **Connections** page (Google, read-only:
+`youtube.readonly` and `yt-analytics.readonly`). Every morning at 11:00 UTC the Worker's cron reads each
+Short posted in the last 30 days (`src/youtube.ts`) and saves it in `post_stats`, the same table the other
+platforms use: a `latest` reading that's replaced each day, plus the `48h` and `7d` readings the
+Performance tab scores, taken on the first pull after the Short is that old. Views, likes and comments
+are live from the YouTube Data API. Watch time, average view duration, shares and subscribers gained come
+from YouTube Analytics, which runs 2 to 3 days behind. **Pull Now** on the Connections page runs it
+straight away. Each video's page shows its numbers, and Performance links to every Short ranked by views.
 
 ## Cloudflare resources
 

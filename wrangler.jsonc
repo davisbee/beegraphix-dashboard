@@ -18,11 +18,17 @@
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "content-factory-media" }],
   // Staff use contentfactory.shopbgx.com; the workers.dev address stays on for AI-DESKTOP's DASHBOARD_URL.
   "routes": [{ "pattern": "contentfactory.shopbgx.com", "custom_domain": true }],
-  "workers_dev": true
+  "workers_dev": true,
+  // Once a day, 11:00 UTC (6 or 7 in the morning Eastern): YouTube numbers for the last 30 days of Shorts (src/youtube.ts).
+  "triggers": { "crons": ["0 11 * * *"] }
   // Secrets (set with `wrangler secret put` or in the Cloudflare dashboard, never in git):
   //   WORKER_TOKEN   the token AI-DESKTOP uses to pick up jobs
   //   SUBMIT_TOKENS  JSON {"<token>": "beegraphix" | "rugbee" | "*"}: who may submit and see jobs, per brand
   //   ANTHROPIC_API_KEY  (optional) Claude API key for "Draft it for me"
   //   RESEND_API_KEY     (optional) Resend key for "Forgot your password?" emails, sent from noreply@shopbgx.com
   //                      (verified in Resend). Without it, the request shows on the Team page instead.
+  //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  the Google Cloud web client for Connect YouTube (Connections page)
+  //   CONNECTIONS_KEY    32 random bytes, base64: encrypts connected accounts' logins in D1
+  //   GHL_TOKEN, GHL_LOCATION_ID  (optional) HighLevel, to find each Short's video id from its published post;
+  //                      without them, Shorts are matched to the channel's uploads by publish time and title
 }
