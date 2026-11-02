@@ -33,6 +33,8 @@
 //     GET  /api/jobs                  latest jobs (?brand= for someone who sees every brand)
 //     GET  /api/jobs/:id              one job
 //     POST /api/jobs/:id/cancel       only while still queued
+//     POST /api/jobs/:id/remove       admins: take a finished video off the list (not one already posted)
+//     POST /api/jobs/:id/restore      admins: put it back; GET /api/jobs?removed=1 lists the removed ones
 //     GET  /api/jobs/:id/video        the finished MP4 (Range requests; ?download for a file)
 //     GET/PUT/POST /api/heygen/...   AI avatar setup, admins only (heygen.ts)
 //     GET/POST /api/users, POST /api/users/:id, POST /api/users/:id/reset   Team page (admins)
@@ -101,6 +103,8 @@ interface JobRow {
   claimed_at: string | null;
   heartbeat_at: string | null;
   finished_at: string | null;
+  removed_at: string | null;
+  removed_by: string | null;
 }
 
 const ACTIVE: Status[] = ["claimed", "rendering", "uploading"];
@@ -157,6 +161,8 @@ function publicJob(j: JobRow) {
     updatedAt: j.updated_at,
     claimedAt: j.claimed_at,
     finishedAt: j.finished_at,
+    removedAt: j.removed_at,
+    removedBy: j.removed_by,
   };
 }
 
@@ -227,10 +233,29 @@ async function listJobs(url: URL, env: Env, c: Caller) {
   // Someone who sees every brand can narrow the list to one.
   const want = url.searchParams.get("brand");
   const brand = c.brand !== "*" ? c.brand : want && (BRANDS as readonly string[]).includes(want) ? want : null;
+  // Removed videos only show when asked for (?removed=1), so they can be restored.
+  const removed = url.searchParams.get("removed") === "1" ? "removed_at IS NOT NULL" : "removed_at IS NULL";
   const rows = brand
-    ? await env.DB.prepare(`SELECT * FROM jobs WHERE brand = ? AND kind IN (${VIDEO_KINDS}) ORDER BY created_at DESC LIMIT ?`).bind(brand, limit).all<JobRow>()
-    : await env.DB.prepare(`SELECT * FROM jobs WHERE kind IN (${VIDEO_KINDS}) ORDER BY created_at DESC LIMIT ?`).bind(limit).all<JobRow>();
+    ? await env.DB.prepare(`SELECT * FROM jobs WHERE brand = ? AND kind IN (${VIDEO_KINDS}) AND ${removed} ORDER BY created_at DESC LIMIT ?`).bind(brand, limit).all<JobRow>()
+    : await env.DB.prepare(`SELECT * FROM jobs WHERE kind IN (${VIDEO_KINDS}) AND ${removed} ORDER BY created_at DESC LIMIT ?`).bind(limit).all<JobRow>();
   return json({ jobs: rows.results.map(publicJob) });
+}
+
+/** Whether this video's page and posts went out through Approve and Post. Those stay: their numbers are still tracked. */
+async function wasPosted(env: Env, id: string) {
+  return Boolean(await env.DB.prepare("SELECT 1 FROM posts WHERE source_job = ? AND approved_at IS NOT NULL").bind(id).first());
+}
+
+/** Takes a finished video off the Videos list, or puts it back. Nothing is erased either way. */
+async function removeJob(env: Env, c: Caller, id: string, remove: boolean) {
+  if (!c.admin) throw new HttpError(403, "Only an admin can remove a video.");
+  const j = await visibleJob(env, c.brand, id);
+  if (remove) {
+    if (!["done", "failed", "cancelled"].includes(j.status)) throw new HttpError(409, "Only a finished video can be removed. Cancel it first if it's still waiting.");
+    if (await wasPosted(env, id)) throw new HttpError(409, "This video was already posted, so it stays.");
+  }
+  await env.DB.prepare("UPDATE jobs SET removed_at = ?, removed_by = ? WHERE id = ?").bind(remove ? now() : null, remove ? c.label : null, id).run();
+  return json(publicJob((await getJob(env, id))!));
 }
 
 async function cancelJob(env: Env, c: Caller, id: string) {
@@ -547,17 +572,19 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (pm && pm[2] === "approve" && m === "POST") return approvePost(req, env, c, pm[1]);
   const sm = p.match(/^\/api\/jobs\/([0-9a-f-]{36})\/stills\/([a-z0-9-]{1,40})$/);
   if (sm && m === "GET") return getStill(env, c, sm[1], sm[2]);
-  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|video|images|stats))?$/);
+  const s = p.match(/^\/api\/jobs\/([0-9a-f-]{36})(?:\/(cancel|remove|restore|video|images|stats))?$/);
   if (s) {
     const [, id, action] = s;
     if (action === "stats" && m === "GET") { await visibleJob(env, c.brand, id); return jobStats(env, id); }
     if (!action && m === "GET") {
       const j = await visibleJob(env, c.brand, id);
       const hasImages = j.status === "done" ? Boolean(await env.MEDIA.head(imagesKey(j))) : false;
-      return json({ ...publicJob(j), hasImages });
+      return json({ ...publicJob(j), hasImages, posted: await wasPosted(env, id) });
     }
     if (action === "images" && m === "GET") return images(env, c, id);
     if (action === "cancel" && m === "POST") return cancelJob(env, c, id);
+    if (action === "remove" && m === "POST") return removeJob(env, c, id, true);
+    if (action === "restore" && m === "POST") return removeJob(env, c, id, false);
     if (action === "video" && m === "GET") return video(req, url, env, c, id);
   }
   throw new HttpError(404, "Not found");
