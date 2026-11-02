@@ -25,10 +25,26 @@ CREATE TABLE oauth_states (
   created_at TEXT NOT NULL
 );
 
--- The platform's own id and link for a post once it's out (YouTube: the video id), so its numbers can be read.
+-- Every post the dashboard finds on a connected account (YouTube: each Short on the channel), whether or not it came
+-- through Approve and Post. Tied to the video job when it can be told which one it is.
+CREATE TABLE platform_posts (
+  platform TEXT NOT NULL,
+  post_id TEXT NOT NULL,                    -- the platform's id (YouTube: the video id)
+  brand TEXT NOT NULL,
+  title TEXT,
+  url TEXT,
+  published_at TEXT,
+  job_id TEXT,                              -- the video job, when known
+  campaign TEXT,                            -- the dashboard campaign, or the utm_campaign on its link
+  item_key TEXT,                            -- the plan step, or the utm_content on its link
+  matched_by TEXT,                          -- highlevel | link | title_time
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY (platform, post_id)
+);
+CREATE INDEX platform_posts_job ON platform_posts (job_id);
+
+-- The platform's own id for a post scheduled through Approve and Post, once it's found.
 ALTER TABLE post_features ADD COLUMN platform_post_id TEXT;
-ALTER TABLE post_features ADD COLUMN platform_url TEXT;
-ALTER TABLE post_features ADD COLUMN matched_by TEXT;  -- highlevel | title_time
 
 -- Numbers every platform can fill. reading also takes "latest": refreshed each day for 30 days, replaced each time.
 ALTER TABLE post_stats ADD COLUMN likes INTEGER;

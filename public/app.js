@@ -1468,7 +1468,7 @@ async function showNumbers(j) {
 }
 
 async function pageYouTube() {
-  shell("performance", `<p class="small" style="margin:0 0 16px"><a href="#/performance">← Performance</a></p>${header(brandName(state.brand), "YouTube", "Every Short the Content Factory posted, most viewed first.")}<div id="yt"><p class="muted">Loading…</p></div>`);
+  shell("performance", `<p class="small" style="margin:0 0 16px"><a href="#/performance">← Performance</a></p>${header(brandName(state.brand), "YouTube", "Every Short on the channel from the last 30 days, most viewed first.")}<div id="yt"><p class="muted">Loading…</p></div>`);
   const d = await api("GET", `/api/youtube?brand=${encodeURIComponent(state.brand)}`);
   const box = $("#yt");
   if (!box) return;
@@ -1477,7 +1477,7 @@ async function pageYouTube() {
     : `Read from ${esc(ch.account_name)}${ch.last_pull_at ? `, last pulled ${esc(ago(ch.last_pull_at))}` : ", not pulled yet"}.${ch.last_error ? ` <span class="bad">${esc(ch.last_error)}</span>` : ""}`;
   box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${status} ${ANALYTICS_LAG}</p>
     <div class="card">${!d.shorts.length ? `<p class="muted small" style="margin:0">No Shorts posted yet.</p>` : `<div class="table-wrap"><table><thead><tr><th>#</th><th>Short</th><th>Views</th><th>Watch min</th><th>Avg view</th><th>Likes</th><th>Comments</th><th>Shares</th><th>Subs</th></tr></thead><tbody>
-      ${d.shorts.map((s, i) => `<tr><td class="muted">${s.now ? i + 1 : ""}</td><td><a href="#/videos/${esc(s.job)}">${esc(s.title)}</a><div class="small muted">${esc(when(s.scheduledAt))}${s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">Watch on YouTube</a>` : " · not found on YouTube yet"}</div></td>
+      ${d.shorts.map((s, i) => `<tr><td class="muted">${s.now ? i + 1 : ""}</td><td>${s.job ? `<a href="#/videos/${esc(s.job)}">${esc(s.title)}</a>` : esc(s.title)}<div class="small muted">${esc(when(s.scheduledAt))}${s.url ? ` · <a href="${esc(s.url)}" target="_blank" rel="noopener">Watch on YouTube</a>` : " · not found on YouTube yet"}${!s.job && s.found ? " · posted outside Approve and Post" : ""}</div></td>
         <td><b>${count(s.now?.views)}</b></td><td>${minutes(s.now?.watchSeconds)}</td><td>${clock(s.now?.avgViewSeconds)}</td><td>${count(s.now?.likes)}</td><td>${count(s.now?.comments)}</td><td>${count(s.now?.shares)}</td><td>${count(s.now?.newFollowers)}</td></tr>`).join("")}
     </tbody></table></div>`}</div>`;
 }
@@ -1510,8 +1510,8 @@ async function pageConnections(params) {
     $("#ytOut").innerHTML = `<p class="muted small">Pulling…</p>`;
     try {
       const r = await api("POST", `/api/connections/youtube/pull${q}`);
-      $("#ytOut").innerHTML = `<div class="notice" style="margin-top:16px">${r.posts} Shorts from the last 30 days. ${r.matched ? `Found ${r.matched} on YouTube just now. ` : ""}Read ${r.read}.
-        ${r.unmatched.length ? `<div class="small">Not found yet: ${esc(r.unmatched.join("; "))}</div>` : ""}${r.problems.length ? `<div class="bad small">${esc(r.problems.join(" "))}</div>` : ""}</div>`;
+      $("#ytOut").innerHTML = `<div class="notice" style="margin-top:16px">${r.shorts} Shorts on the channel from the last 30 days, ${r.linked} tied to their video here${r.newlyLinked ? ` (${r.newlyLinked} just now)` : ""}. Read ${r.read}. <a href="#/youtube">See them</a>
+        ${r.notFound.length ? `<div class="small">Scheduled but not found on YouTube: ${esc(r.notFound.join("; "))}</div>` : ""}${r.problems.length ? `<div class="bad small">${esc(r.problems.join(" "))}</div>` : ""}</div>`;
     } catch (err) { $("#ytOut").innerHTML = `<div class="error" style="margin-top:16px">${esc(err.message)}</div>`; }
     e.target.disabled = false;
   };
