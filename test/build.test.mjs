@@ -354,8 +354,9 @@ test("the desktop sends stats and the starting snapshot", async () => {
 });
 
 test("the Performance tab scores reels by goal, and paid posts stay out", async () => {
-  // A finished video, posted, with its reel 8 days old.
-  const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Scored ${Date.now()}`, goal: "reach", hookText: "A hook worth scoring" }) });
+  // A finished video, posted, with its reel 8 days old. Its own hook, so older runs in this database don't count.
+  const hook = `A hook worth scoring ${Date.now()}`;
+  const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Scored ${Date.now()}`, goal: "reach", hookText: hook }) });
   const id = made.data.id;
   await call("POST", "/api/desktop/claim", T.worker);
   await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
@@ -399,8 +400,10 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   assert.equal(mine.numbers.watchSeconds, 7200);
   assert.equal(mine.numbers.linkClicks, 1);
   assert.equal(typeof mine.score, "number");
-  assert.ok(perf.data.goals.reach.ranks.hook.some((r) => r.key === "A hook worth scoring"));
-  assert.equal(perf.data.goals.reach.ranks.hook.find((r) => r.key === "A hook worth scoring").tooFew, true);
+  assert.ok(perf.data.goals.reach.ranks.hook.some((r) => r.key === hook));
+  const ranked = perf.data.goals.reach.ranks.hook.find((r) => r.key === hook);
+  assert.equal(ranked.posts, 3, "Facebook, TikTok and LinkedIn");
+  assert.equal(ranked.tooFew, false);
   assert.equal((await call("GET", "/api/performance?brand=beegraphix", T.rugbee)).status, 404, "other brand");
   assert.equal((await call("GET", "/api/performance?brand=beegraphix", null)).status, 401);
 
@@ -408,9 +411,10 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   assert.equal((await call("POST", "/api/performance/boosted", T.bgx, mark)).status, 403, "admins only");
   assert.equal((await call("POST", "/api/performance/boosted", T.admin, mark)).status, 200);
   assert.equal((await call("POST", "/api/performance/boosted", T.admin, { ...mark, platform: "tiktok", itemKey: `${key}t` })).status, 200);
+  assert.equal((await call("POST", "/api/performance/boosted", T.admin, { ...mark, platform: "linkedin", itemKey: `${key}l` })).status, 200);
   const paid = (await call("GET", "/api/performance?brand=beegraphix", T.bgx)).data;
   assert.ok(paid.posts.filter((p) => p.job === id).every((p) => p.score === null));
-  assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === "A hook worth scoring"), "paid posts leave the rankings");
+  assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === hook), "paid posts leave the rankings");
 });
 
 test("a snapshot keeps its first numbers and only fills blanks", async () => {
