@@ -89,12 +89,24 @@ export function scorecards(posts: ScoredPost[]) {
 }
 
 interface FeatureRow { job_id: string; campaign: string; item_key: string; platform: string; brand: string; goal: string; template: string | null; hook_text: string | null; slot: string | null; weekday: number | null; scheduled_at: string | null; boosted: number }
+export interface BaselineRow { brand: string; platform: string; as_of: string; followers: number | null; avg_views: number | null }
 interface StatRow { job_id: string; platform: string; item_key: string; reading: string; views: number | null; watch_seconds: number | null; shares: number | null; comments: number | null; saves: number | null; new_followers: number | null; orders: number | null; leads: number | null; link_clicks: number | null; boosted: number }
+
+/** The brand a caller asked for: their own, or any brand (or "*", all of them) for someone who can see every brand. */
+export function askedBrand(c: Caller, url: URL) {
+  const asked = url.searchParams.get("brand") || c.brand;
+  if (c.brand !== "*" && asked !== c.brand) throw new HttpError(404, "Not found");
+  return asked;
+}
 
 /** GET /api/performance?brand= : a brand, or everything for someone who can see every brand. */
 export async function getPerformance(env: Env, c: Caller, url: URL) {
-  const asked = url.searchParams.get("brand") || c.brand;
-  if (c.brand !== "*" && asked !== c.brand) throw new HttpError(404, "Not found");
+  const d = await performanceData(env, askedBrand(c, url));
+  return json({ ...d, posts: d.posts.slice(0, 200), canMark: c.admin });
+}
+
+/** Every post with its score, the scorecards, and where each platform started. Also what the weekly report reads. */
+export async function performanceData(env: Env, asked: string) {
   const where = asked === "*" ? "" : " WHERE brand = ?";
   const bind = asked === "*" ? [] : [asked];
   const [features, stats, events, baseline, pulled] = await env.DB.batch([
@@ -126,7 +138,7 @@ export async function getPerformance(env: Env, c: Caller, url: URL) {
       },
     };
   });
-  return json({ ...scorecards(posts), posts: posts.slice(0, 200), baseline: baseline.results, lastPull: (pulled.results[0] as { at: string | null } | undefined)?.at ?? null, canMark: c.admin });
+  return { ...scorecards(posts), posts, baseline: baseline.results as unknown as BaselineRow[], lastPull: (pulled.results[0] as { at: string | null } | undefined)?.at ?? null };
 }
 
 /** POST /api/performance/boosted {job, platform, itemKey, boosted}: an admin marks a post as paid. */

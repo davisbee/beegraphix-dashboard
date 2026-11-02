@@ -1,5 +1,5 @@
 // Content Factory dashboard: the screens staff use. Plain JavaScript, no build step.
-// Pages: #/videos, #/videos/<id>, #/performance, #/youtube, #/new, #/store, #/render, #/team, #/avatar, #/connections, #/account. Everything talks to /api/.
+// Pages: #/videos, #/videos/<id>, #/performance, #/week, #/youtube, #/new, #/store, #/render, #/team, #/avatar, #/connections, #/account. Everything talks to /api/.
 "use strict";
 
 const BRAND_INFO = {
@@ -1419,7 +1419,7 @@ const perfLabel = (dim, key) => dim === "slot" ? SLOT_NAMES[key] ?? key : dim ==
 const perfValue = (m, v) => v === null || v === undefined ? "No data yet" : m === "watchSeconds" ? `${(v / 3600).toFixed(1)} hours` : Number(v).toLocaleString();
 
 async function pagePerformance() {
-  shell("performance", `${header("", "Performance", "How each video did against the goal it was made for. A score of 100 is a typical post for its goal.", `<a class="btn outline" href="#/youtube">YouTube Shorts by Views</a>`)}<div id="perf"><p class="muted">Loading…</p></div>`);
+  shell("performance", `${header("", "Performance", "How each video did against the goal it was made for. A score of 100 is a typical post for its goal.", `<a class="btn outline" href="#/week">This Week</a> <a class="btn outline" href="#/youtube">YouTube Shorts by Views</a>`)}<div id="perf"><p class="muted">Loading…</p></div>`);
   const d = await api("GET", `/api/performance?brand=${encodeURIComponent(state.brand)}`);
   const box = $("#perf");
   if (!box) return;
@@ -1442,6 +1442,33 @@ async function pagePerformance() {
       catch (e) { el.checked = !el.checked; el.disabled = false; alert(e.message); }
     };
   });
+}
+
+// The weekly report: the same numbers the Monday email has (src/weekly.ts).
+const WEEK_DIMENSIONS = { template: "Template", hook: "Hook", slot: "Time of day", weekday: "Day", platform: "Platform" };
+async function pageWeek() {
+  shell("performance", `<p class="small" style="margin:0 0 16px"><a href="#/performance">← Performance</a></p>${header(brandName(state.brand), "This Week", "The last 7 days. A score of 100 is a typical post for its goal.")}<div id="week"><p class="muted">Loading…</p></div>`);
+  const d = await api("GET", `/api/performance/weekly?brand=${encodeURIComponent(state.brand)}`);
+  const box = $("#week");
+  if (!box) return;
+  const day = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const n = (v) => v === null || v === undefined ? "" : Number(v).toLocaleString();
+  const none = (t) => `<p class="muted small" style="margin:0">${esc(t)}</p>`;
+  const posts = (list) => `<div class="table-wrap"><table><thead><tr><th>Post</th><th>Platform</th><th>Goal</th><th>Score</th></tr></thead><tbody>${list.map((p) => `<tr><td><a href="#/videos/${esc(p.job)}">${esc(p.label)}</a>${p.scheduledAt ? `<div class="small muted">${esc(when(p.scheduledAt))}</div>` : ""}</td><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${esc(GOAL_NAMES[p.goal] ?? p.goal)}</td><td><b>${p.score}</b> <span class="small muted">${p.reading === "7d" ? "Final" : "48 hours"}</span></td></tr>`).join("")}</tbody></table></div>`;
+  const name = (f) => f.dimension === "slot" ? SLOT_NAMES[f.key] ?? f.key : f.dimension === "platform" ? PLATFORM_NAMES[f.key] ?? f.key : f.key;
+  box.innerHTML = `<p class="small muted" style="margin:0 0 16px">${esc(day(d.from))} to ${esc(day(new Date(Date.parse(d.to) - 1)))}. ${d.recipients.length ? `This goes by email every Monday morning to ${esc(d.recipients.join(", "))}.` : "It goes by email every Monday morning."}</p>
+  <div class="card"><h2>Platforms</h2>${d.platforms.length ? `<div class="table-wrap"><table><thead><tr><th>Platform</th><th>Posts</th><th>Average views so far</th><th>Before</th><th>New followers</th><th>Reach</th></tr></thead><tbody>${d.platforms.map((p) => `<tr><td>${esc(PLATFORM_NAMES[p.platform] ?? p.platform)}</td><td>${n(p.posts)}</td><td>${n(p.avgViews)}</td><td>${n(p.startViews)}</td><td>${n(p.newFollowers)}</td><td>${n(p.reach)}</td></tr>`).join("")}</tbody></table></div><p class="small muted" style="margin:10px 0 0">Posts, new followers and reach are HighLevel's 7 day numbers. Before is the average from Oct 31.</p>` : none("Nothing posted or read this week.")}</div>
+  <div class="card"><h2>Best Posts</h2>${d.best.length ? posts(d.best) : none("No post has a score yet. Scores start 48 hours after a video goes out through Approve and Post.")}${d.worst.length ? `<h3 class="sub">Weakest Posts</h3>${posts(d.worst)}` : ""}</div>
+  <div class="card"><h2>Clicks and Leads</h2>${d.links.length ? `<div class="table-wrap"><table><thead><tr><th>Video</th><th>Clicks</th><th>Leads</th></tr></thead><tbody>${d.links.map((l) => `<tr><td><a href="#/videos/${esc(l.job)}">${esc(l.title)}</a></td><td>${n(l.clicks)}</td><td>${n(l.leads)}</td></tr>`).join("")}</tbody></table></div>` : none("No clicks on a tracked link this week.")}</div>
+  <div class="card"><h2>Next Week</h2><p style="margin:0">${d.goingOut} ${d.goingOut === 1 ? "post goes" : "posts go"} out, and ${d.finalReads} ${d.finalReads === 1 ? "post gets its" : "posts get their"} final 7 day read.</p></div>
+  <div class="card"><h2>Worth a Look</h2>${d.findings.length ? `<div class="table-wrap"><table><thead><tr><th>What</th><th>Goal</th><th>Posts</th><th>Score</th></tr></thead><tbody>${d.findings.map((f) => `<tr><td>${esc(WEEK_DIMENSIONS[f.dimension])}: ${esc(name(f))}</td><td>${esc(GOAL_NAMES[f.goal] ?? f.goal)}</td><td>${f.posts}</td><td><b>${f.score}</b></td></tr>`).join("")}</tbody></table></div><p class="small muted" style="margin:10px 0 0">These are hunches, not rules. Nothing changes until you approve one for the playbook.</p>` : none("Nothing yet. A finding needs at least 3 posts with a final 7 day score in each group it compares.")}</div>
+  ${state.me.role === "admin" && d.recipients.length ? `<p><button class="btn outline" id="send-week">Email It Now</button> <span class="small muted" id="sent-week"></span></p>` : ""}`;
+  const send = $("#send-week");
+  if (send) send.onclick = async () => {
+    send.disabled = true;
+    try { const r = await api("POST", "/api/performance/weekly/send"); $("#sent-week").textContent = `Sent to ${r.sent.join(", ")}.`; }
+    catch (e) { send.disabled = false; alert(e.message); }
+  };
 }
 
 // ---------- Platform numbers: a video's posts, the YouTube list, and the Connections page ----------
@@ -1536,6 +1563,7 @@ function route() {
   if (parts[0] === "team") return pageTeam().catch(fail);
   if (parts[0] === "avatar") return pageAvatar().catch(fail);
   if (parts[0] === "youtube") return pageYouTube().catch(fail);
+  if (parts[0] === "week") return pageWeek().catch(fail);
   if (parts[0] === "connections") return pageConnections(params).catch(fail);
   if (parts[0] === "store") return pageStore().catch(fail);
   if (parts[0] === "account") return pageAccount(false);

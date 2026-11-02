@@ -417,6 +417,41 @@ test("the Performance tab scores reels by goal, and paid posts stay out", async 
   assert.ok(!paid.goals.reach.ranks.hook.some((r) => r.key === hook), "paid posts leave the rankings");
 });
 
+test("the weekly report shows this week's scored posts, and only admins can email it", async () => {
+  // A video whose Facebook reel went out 8 days ago and has its final read.
+  const hook = `A hook for the week ${Date.now()}`;
+  const id = (await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Weekly ${Date.now()}`, goal: "reach", hookText: hook }) })).data.id;
+  await call("POST", "/api/desktop/claim", T.worker);
+  await call("POST", `/api/desktop/jobs/${id}/upload/start`, T.worker);
+  const part = await call("PUT", `/api/desktop/jobs/${id}/upload/part?n=1`, T.worker, null, Buffer.from("fake mp4"));
+  await call("POST", `/api/desktop/jobs/${id}/upload/complete`, T.worker, { parts: [part.data] });
+  await call("PUT", `/api/jobs/${id}/post`, T.bgx, { slug: `weekly-${Date.now().toString(36)}`, copy: { page: { title: "T | BeeGraphix", headline: "H", description: "d" }, captions: { facebook: "Hi {url}" } } });
+  assert.equal((await call("POST", `/api/jobs/${id}/post/approve`, T.admin, { start: "2099-01-06", startTime: "14:25" })).status, 202);
+  const pub = (await call("POST", "/api/desktop/claim", T.worker)).data;
+  const key = `week${Date.now().toString(36)}`;
+  await call("POST", `/api/desktop/jobs/${pub.id}/finish`, T.worker, { result: { posted: [{ key: `${key}:facebook`, platform: "facebook", status: "scheduled", scheduleDate: new Date(Date.now() - 8 * 86400_000).toISOString(), id: "w1", type: "reel", day: 0 }] } });
+  await call("POST", "/api/desktop/stats", T.worker, { posts: [{ source: "meta", postId: `w-${key}`, reading: "7d", brand: "beegraphix", platform: "facebook", jobId: id, itemKey: key, views: 400, watchSeconds: 3600, shares: 4, newFollowers: 1 }] });
+  await fetch(`${BASE}/api/t`, { method: "POST", body: JSON.stringify({ id, source: "facebook", content: key, event: "click" }) });
+
+  const week = await call("GET", "/api/performance/weekly?brand=beegraphix", T.bgx);
+  assert.equal(week.status, 200, JSON.stringify(week.data));
+  const mine = [...week.data.best, ...week.data.worst].filter((p) => p.job === id);
+  assert.ok(mine.length || week.data.best.length === 3, "a post with a final score from the last 2 weeks is ranked, unless 6 others beat it to the lists");
+  if (mine.length) assert.equal(mine[0].label, hook);
+  assert.ok(week.data.links.some((l) => l.job === id && l.clicks === 1), "this week's click on its link");
+  assert.ok(Array.isArray(week.data.platforms) && Array.isArray(week.data.findings));
+  assert.equal(typeof week.data.goingOut, "number");
+  assert.deepEqual(week.data.recipients, [], "only admins see who it goes to");
+  assert.equal((await call("GET", "/api/performance/weekly?brand=beegraphix", T.rugbee)).status, 404, "other brand");
+  assert.equal((await call("GET", "/api/performance/weekly", null)).status, 401);
+
+  assert.equal((await call("POST", "/api/performance/weekly/send", T.bgx)).status, 403, "admins only");
+  const admin = await call("GET", "/api/performance/weekly?brand=beegraphix", T.admin);
+  assert.ok(admin.data.recipients.includes("davis@beegraphix.com"));
+  // The local server has no Resend key, so it says so rather than pretending it sent.
+  assert.equal((await call("POST", "/api/performance/weekly/send", T.admin)).status, 503);
+});
+
 test("a posted Short shows on the YouTube list and its video's page with its numbers", async () => {
   const made = await call("POST", "/api/jobs", T.bgx, { kind: "build", spec: spec({ title: `Short ${Date.now()}` }) });
   const id = made.data.id;
