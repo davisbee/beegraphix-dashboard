@@ -98,10 +98,13 @@ and Secrets), never in git:
 ## YouTube numbers
 
 An admin connects the channel once under the account menu's **Connections** page (Google, read-only:
-`youtube.readonly` and `yt-analytics.readonly`). Every morning at 11:00 UTC the Worker's cron reads each
-Short posted in the last 30 days (`src/youtube.ts`) and saves it in `post_stats`, the same table the other
-platforms use: a `latest` reading that's replaced each day, plus the `48h` and `7d` readings the
-Performance tab scores, taken on the first pull after the Short is that old. Views, likes and comments
+`youtube.readonly` and `yt-analytics.readonly`). Every morning at 11:00 UTC the Worker's cron reads every
+Short on the channel from the last 30 days (`src/youtube.ts`), including ones posted from the Content
+Factory's command line. Each is tied to its video job where it can be (HighLevel's published post, the
+tracking link in its description, or publish time and title) and listed in `platform_posts`. The numbers
+go in `post_stats`, the same table the other platforms use: a `latest` reading that's replaced each day,
+plus the `48h` and `7d` readings the Performance tab scores, taken on the first pull after the Short is
+that old. Views, likes and comments
 are live from the YouTube Data API. Watch time, average view duration, shares and subscribers gained come
 from YouTube Analytics, which runs 2 to 3 days behind. **Pull Now** on the Connections page runs it
 straight away. Each video's page shows its numbers, and Performance links to every Short ranked by views.
