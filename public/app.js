@@ -83,7 +83,8 @@ function jobTitle(j) {
 }
 
 function statusPill(j) {
-  const [label, cls] = STATUS[j.status] ?? [j.status, ""];
+  // A finished video that went out through Approve and Post says so, instead of "Ready to review".
+  const [label, cls] = j.status === "done" && j.posting ? [j.posting === "scheduled" ? "Scheduled" : "Posted", "done"] : STATUS[j.status] ?? [j.status, ""];
   const pct = j.status === "rendering" && j.progress != null ? ` ${Math.round(j.progress * 100)}%` : "";
   return `<span class="pill ${cls}">${esc(label + pct)}</span>`;
 }
