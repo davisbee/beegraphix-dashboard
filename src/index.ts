@@ -238,7 +238,25 @@ async function listJobs(url: URL, env: Env, c: Caller) {
   const rows = brand
     ? await env.DB.prepare(`SELECT * FROM jobs WHERE brand = ? AND kind IN (${VIDEO_KINDS}) AND ${removed} ORDER BY created_at DESC LIMIT ?`).bind(brand, limit).all<JobRow>()
     : await env.DB.prepare(`SELECT * FROM jobs WHERE kind IN (${VIDEO_KINDS}) AND ${removed} ORDER BY created_at DESC LIMIT ?`).bind(limit).all<JobRow>();
-  return json({ jobs: rows.results.map(publicJob) });
+  return json({ jobs: await withPosting(env, rows.results.map(publicJob)) });
+}
+
+/**
+ * Which videos went out through Approve and Post: "scheduled" while any of their posts is still waiting in
+ * HighLevel, "posted" once they've all gone. The Videos list shows it in place of "Ready to review".
+ */
+async function withPosting<J extends { id: string }>(env: Env, jobs: J[]): Promise<(J & { posting: "scheduled" | "posted" | null })[]> {
+  const found = jobs.length
+    ? await env.DB.prepare("SELECT source_job, posted FROM posts WHERE source_job IN (SELECT value FROM json_each(?)) AND (posted IS NOT NULL OR live_url IS NOT NULL)")
+      .bind(JSON.stringify(jobs.map((j) => j.id))).all<{ source_job: string; posted: string | null }>()
+    : { results: [] };
+  const at = Date.now();
+  const state = new Map(found.results.map((r) => {
+    let items: { scheduleDate?: string | null }[] = [];
+    try { items = JSON.parse(r.posted ?? "[]"); } catch { /* unreadable: counts as posted */ }
+    return [r.source_job, items.some((p) => p.scheduleDate && Date.parse(p.scheduleDate) > at) ? "scheduled" : "posted"] as const;
+  }));
+  return jobs.map((j) => ({ ...j, posting: state.get(j.id) ?? null }));
 }
 
 /** Whether this video's page and posts went out through Approve and Post. Those stay: their numbers are still tracked. */
